@@ -88,6 +88,7 @@ import { downloadText, exportCsv, exportJson, exportMarkdown } from "./lib/expor
 import { buildManualQuote, refreshApiPrices } from "./lib/prices";
 import {
   getFirebaseServices,
+  getFirebaseAuthErrorMessage,
   handleRedirectLoginResult,
   isFirebaseConfigured,
   listenToFirebaseUser,
@@ -481,7 +482,7 @@ function App() {
       })
       .catch((error) => {
         setSyncStatus("error");
-        setNotice(error instanceof Error ? error.message : "Redirect 로그인 처리에 실패했습니다.");
+        setNotice(getFirebaseAuthErrorMessage(error));
       });
   }, [ready]);
 
@@ -634,7 +635,7 @@ function App() {
       else setSyncMessage("팝업이 차단되어 전체 화면 로그인으로 전환합니다.");
     } catch (error) {
       setSyncStatus("error");
-      setNotice(error instanceof Error ? error.message : "Google 로그인에 실패했습니다.");
+      setNotice(getFirebaseAuthErrorMessage(error));
     }
   };
 
@@ -686,6 +687,11 @@ function App() {
     if (tab !== "more") setMoreSection(null);
   };
 
+  const openMoreSection = (section: MoreSectionKey) => {
+    setActiveTab("more");
+    setMoreSection(section);
+  };
+
   const openInitialHolding = () => {
     setActiveTab("trades");
     setMoreSection(null);
@@ -721,9 +727,9 @@ function App() {
               <p>{syncStatusLabels[syncStatus]}</p>
             </div>
             {firebaseUser ? (
-              <button className="secondary-button" type="button" onClick={() => void syncWithCloud("merge")}>
+              <button className="secondary-button" type="button" onClick={() => void disconnectFirebase()}>
                 <Cloud className="h-4 w-4" />
-                동기화
+                로그아웃
               </button>
             ) : (
               <button className="secondary-button" type="button" onClick={() => void connectFirebase()}>
@@ -785,6 +791,7 @@ function App() {
             priceRefreshing={priceRefreshing}
             onRefreshPrices={() => void refreshPrices(true)}
             onOpenTab={openTab}
+            onOpenBackup={() => openMoreSection("backup")}
             onInitialHolding={openInitialHolding}
           />
         )}
@@ -848,6 +855,7 @@ function Dashboard({
   priceRefreshing,
   onRefreshPrices,
   onOpenTab,
+  onOpenBackup,
   onInitialHolding
 }: {
   state: AppState;
@@ -857,6 +865,7 @@ function Dashboard({
   priceRefreshing: boolean;
   onRefreshPrices: () => void;
   onOpenTab: (tab: TabKey) => void;
+  onOpenBackup: () => void;
   onInitialHolding: () => void;
 }) {
   const [accountScope, setAccountScope] = useState<AccountType | "all">("all");
@@ -878,6 +887,7 @@ function Dashboard({
   const contributors = [...activePositions].sort((a, b) => b.unrealizedPnlKrw - a.unrealizedPnlKrw).slice(0, 5);
   const dataGapCount = missingPriceCount(state, positions);
   const hasCostBasis = scopedMetrics.totalInvested > 0;
+  const hasPortfolioData = positions.some((position) => position.quantity > 0) || state.trades.length > 0;
   const accountTabs: Array<{ key: AccountType | "all"; label: string }> = [
     { key: "all", label: "전체" },
     { key: "taxable", label: "일반계좌" },
@@ -911,6 +921,34 @@ function Dashboard({
           </button>
         </div>
       </div>
+
+      {!hasPortfolioData && (
+        <Section title="초기 세팅 안내" icon={<CheckCircle2 className="h-5 w-5 text-teal-700" />}>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <button className="rounded-md border border-slate-200 bg-white p-4 text-left transition hover:border-teal-500 hover:bg-teal-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500 dark:hover:bg-slate-950" type="button" onClick={onInitialHolding}>
+              <p className="font-bold text-slate-950 dark:text-white">초기보유 입력</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">앱 사용 전 이미 갖고 있던 종목을 시작 잔고로 넣습니다.</p>
+            </button>
+            <button className="rounded-md border border-slate-200 bg-white p-4 text-left transition hover:border-teal-500 hover:bg-teal-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500 dark:hover:bg-slate-950" type="button" onClick={() => onOpenTab("trades")}>
+              <p className="font-bold text-slate-950 dark:text-white">매매 입력</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">앱 사용 후 실제 체결된 매수·매도 기록을 저장합니다.</p>
+            </button>
+            <button className="rounded-md border border-slate-200 bg-white p-4 text-left transition hover:border-teal-500 hover:bg-teal-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500 dark:hover:bg-slate-950" type="button" onClick={onOpenBackup}>
+              <p className="font-bold text-slate-950 dark:text-white">Google Drive 백업 설정</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {state.settings.driveSync.connected ? "연결됨" : "미연결"} · 마지막 백업 {state.settings.driveSync.lastBackupAt?.slice(0, 16).replace("T", " ") ?? "없음"}
+              </p>
+            </button>
+            <button className="rounded-md border border-slate-200 bg-white p-4 text-left transition hover:border-teal-500 hover:bg-teal-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500 dark:hover:bg-slate-950" type="button" onClick={onRefreshPrices} disabled={priceRefreshing}>
+              <p className="font-bold text-slate-950 dark:text-white">가격 새로고침</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{state.settings.lastPriceRefreshError ?? "보유 종목이 생기면 자동 가격 갱신을 시도합니다."}</p>
+            </button>
+          </div>
+        </Section>
+      )}
+
+      {!hasPortfolioData ? null : (
+        <>
 
       <div className="flex gap-2 overflow-x-auto">
         {accountTabs.map((tab) => (
@@ -1006,6 +1044,8 @@ function Dashboard({
           </div>
         </Section>
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1085,6 +1125,11 @@ const PositionMiniList = ({
   </div>
 );
 
+const formatPlanPrice = (value?: number, currency?: Currency) => {
+  if (!value || value <= 0) return "—";
+  return currency === "USD" ? `$${formatNumber(value, 2)}` : formatKrw(value);
+};
+
 const AccountPositionTable = ({
   state,
   positions,
@@ -1099,10 +1144,26 @@ const AccountPositionTable = ({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[920px] text-left text-sm">
+      <table className="w-full min-w-[1320px] text-left text-sm">
         <thead>
           <tr className="border-b border-slate-200 dark:border-slate-800">
-            {["계좌", "종목", "수량", "평균단가", "현재가", "평가금액", "평가손익", "수익률", "비중"].map((header) => (
+            {[
+              "계좌",
+              "종목",
+              "수량",
+              "평균단가",
+              "현재가",
+              "평가금액",
+              "평가손익",
+              "수익률",
+              "비중",
+              "목표가",
+              "매도검토가",
+              "손절가",
+              "추가매수 가능가",
+              "투자등급",
+              "다음 점검일"
+            ].map((header) => (
               <th key={header} className="px-3 py-2 font-bold">{header}</th>
             ))}
           </tr>
@@ -1138,6 +1199,12 @@ const AccountPositionTable = ({
                 </td>
                 <td className="px-3 py-2">{hasPriceData && hasCostData ? formatPercent(position.unrealizedReturnRate) : "—"}</td>
                 <td className="px-3 py-2">{hasPriceData && totalValue > 0 ? formatPercent((position.marketValueKrw / totalValue) * 100) : "—"}</td>
+                <td className="px-3 py-2">{formatPlanPrice(thesis?.targetPrice, asset?.currency)}</td>
+                <td className="px-3 py-2">{formatPlanPrice(thesis?.invalidationPrice, asset?.currency)}</td>
+                <td className="px-3 py-2">{formatPlanPrice(thesis?.stopLossPrice, asset?.currency)}</td>
+                <td className="px-3 py-2">{formatPlanPrice(thesis?.addBuyPrice, asset?.currency)}</td>
+                <td className="px-3 py-2">{thesis ? gradeLabels[thesis.grade] : "—"}</td>
+                <td className="px-3 py-2">{thesis?.nextReviewAt || thesis?.lastReviewedAt || "—"}</td>
               </tr>
             );
           })}
@@ -1493,12 +1560,17 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
 
   return (
     <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-      <Section title="빠른 매매 입력">
+      <Section title={draft.kind === "initial_holding" ? "초기보유 입력" : "매매 입력"}>
         <form className="grid gap-3" onSubmit={addTrade}>
           <button className="secondary-button justify-self-start" type="button" onClick={() => setDraft({ ...draft, side: "buy", kind: "initial_holding" })}>
             <Plus className="h-4 w-4" />
             초기보유 입력
           </button>
+          <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+            {draft.kind === "initial_holding"
+              ? "초기보유는 앱 사용 전 이미 보유한 종목의 시작 수량과 원가를 넣는 용도입니다."
+              : "매매입력은 앱 사용 후 실제 체결된 매수·매도 기록을 저장하는 용도입니다."}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="날짜"><input className="field" type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></Field>
             <Field label="계좌">
@@ -1574,7 +1646,10 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
               </div>
             )}
           </div>
-          <button className="primary-button" type="submit"><Save className="h-4 w-4" />매매 저장</button>
+          <button className="primary-button" type="submit">
+            <Save className="h-4 w-4" />
+            {draft.kind === "initial_holding" ? "초기보유 저장" : "매매 저장"}
+          </button>
         </form>
       </Section>
       <Section title="매매 기록">
@@ -1693,6 +1768,9 @@ function ThesisManager({
     assetId: selectedAssetId,
     grade: "B",
     summary: ["", "", ""],
+    targetPrice: 0,
+    stopLossPrice: 0,
+    addBuyPrice: 0,
     holdingConditionTags: [],
     holdingMemo: "",
     keyRisk: "",
@@ -1711,7 +1789,8 @@ function ThesisManager({
     alternatives: "",
     alternativeAssetIds: [],
     alternativePresetTags: [],
-    lastReviewedAt: today()
+    lastReviewedAt: today(),
+    nextReviewAt: ""
   });
   const [draft, setDraft] = useState<Omit<Thesis, "id">>(() => createDraft(assetId));
 
@@ -1750,11 +1829,23 @@ function ThesisManager({
               {Object.entries(gradeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </Field>
+          <Field label="목표가">
+            <input className="field" type="number" value={draft.targetPrice} onChange={(event) => setDraft({ ...draft, targetPrice: inputNumber(event.target.value) })} />
+          </Field>
           <Field label="매도검토가">
             <input className="field" type="number" value={draft.invalidationPrice} onChange={(event) => setDraft({ ...draft, invalidationPrice: inputNumber(event.target.value) })} />
           </Field>
+          <Field label="손절가">
+            <input className="field" type="number" value={draft.stopLossPrice} onChange={(event) => setDraft({ ...draft, stopLossPrice: inputNumber(event.target.value) })} />
+          </Field>
+          <Field label="추가매수 가능가">
+            <input className="field" type="number" value={draft.addBuyPrice} onChange={(event) => setDraft({ ...draft, addBuyPrice: inputNumber(event.target.value) })} />
+          </Field>
           <Field label="마지막 점검일">
             <input className="field" type="date" value={draft.lastReviewedAt} onChange={(event) => setDraft({ ...draft, lastReviewedAt: event.target.value })} />
+          </Field>
+          <Field label="다음 점검일">
+            <input className="field" type="date" value={draft.nextReviewAt} onChange={(event) => setDraft({ ...draft, nextReviewAt: event.target.value })} />
           </Field>
         </div>
         <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
@@ -1803,6 +1894,14 @@ function ChecklistView({ state, updateState }: { state: AppState; updateState: (
     date: today(),
     accountId: state.accounts[0]?.id ?? "",
     assetId: state.assets[0]?.id ?? "",
+    buyReason: "",
+    trend: "확인 안함",
+    overheated: "확인 안함",
+    supply: "확인 안함",
+    positionWeightMemo: "",
+    stopLossPlan: "",
+    targetPricePlan: "",
+    finalDecision: "",
     planned: true,
     fomo: false,
     averaging: false,
@@ -1851,6 +1950,40 @@ function ChecklistView({ state, updateState }: { state: AppState; updateState: (
             <Field label="종목">
               <select className="field" value={draft.assetId} onChange={(event) => setDraft({ ...draft, assetId: event.target.value })}>
                 {state.assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="매수 이유">
+            <textarea className="field min-h-20" value={draft.buyReason} onChange={(event) => setDraft({ ...draft, buyReason: event.target.value })} />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="추세">
+              <select className="field" value={draft.trend} onChange={(event) => setDraft({ ...draft, trend: event.target.value })}>
+                {["확인 안함", "상승", "횡보", "하락", "추세 회복", "추세 이탈"].map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </Field>
+            <Field label="과열 여부">
+              <select className="field" value={draft.overheated} onChange={(event) => setDraft({ ...draft, overheated: event.target.value })}>
+                {["확인 안함", "아님", "주의", "과열"].map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </Field>
+            <Field label="수급">
+              <select className="field" value={draft.supply} onChange={(event) => setDraft({ ...draft, supply: event.target.value })}>
+                {["확인 안함", "양호", "중립", "악화"].map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </Field>
+            <Field label="비중">
+              <input className="field" value={draft.positionWeightMemo} onChange={(event) => setDraft({ ...draft, positionWeightMemo: event.target.value })} placeholder="예: 목표 5%, 현재 3%" />
+            </Field>
+            <Field label="손절 기준">
+              <input className="field" value={draft.stopLossPlan} onChange={(event) => setDraft({ ...draft, stopLossPlan: event.target.value })} />
+            </Field>
+            <Field label="목표가">
+              <input className="field" value={draft.targetPricePlan} onChange={(event) => setDraft({ ...draft, targetPricePlan: event.target.value })} />
+            </Field>
+            <Field label="최종 판단">
+              <select className="field" value={draft.finalDecision} onChange={(event) => setDraft({ ...draft, finalDecision: event.target.value })}>
+                {["", "소액 분할매수 가능", "보류", "매수 금지", "기록만 저장"].map((option) => <option key={option || "empty"} value={option}>{option || "선택 안 함"}</option>)}
               </select>
             </Field>
           </div>
@@ -1906,6 +2039,11 @@ function ChecklistView({ state, updateState }: { state: AppState; updateState: (
                 <span>{checklistResultLabels[item.result]}</span>
               </div>
               <p className="mt-1 text-xs text-slate-500">{item.date} · {item.memo}</p>
+              {(item.finalDecision || item.buyReason) && (
+                <p className="mt-1 text-xs text-slate-500">
+                  {item.finalDecision || "최종 판단 없음"} · {item.buyReason || "매수 이유 없음"}
+                </p>
+              )}
             </div>
           ))}
           {!state.checklists.length && <EmptyText text="저장된 점검 기록이 없습니다." />}
@@ -2292,6 +2430,8 @@ function BackupView({
           <div className="rounded-md bg-slate-50 p-3 text-sm dark:bg-slate-950">
             <p><strong>연결 상태:</strong> {state.settings.driveSync.connected ? "연결됨" : "미연결"}</p>
             <p><strong>마지막 백업:</strong> {state.settings.driveSync.lastBackupAt?.slice(0, 19).replace("T", " ") ?? "없음"}</p>
+            <p><strong>복원 상태:</strong> {state.settings.driveSync.lastRestoreAt ? "복원 완료" : "복원 기록 없음"}</p>
+            <p><strong>마지막 복원:</strong> {state.settings.driveSync.lastRestoreAt?.slice(0, 19).replace("T", " ") ?? "없음"}</p>
             <p><strong>Drive 수정일:</strong> {state.settings.driveSync.lastDriveModifiedAt?.slice(0, 19).replace("T", " ") ?? "없음"}</p>
           </div>
           <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">

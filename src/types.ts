@@ -94,6 +94,9 @@ export interface Thesis {
   assetId: string;
   grade: ThesisGrade;
   summary: [string, string, string];
+  targetPrice: number;
+  stopLossPrice: number;
+  addBuyPrice: number;
   holdingConditionTags: string[];
   holdingMemo: string;
   keyRisk: string;
@@ -113,6 +116,7 @@ export interface Thesis {
   alternativeAssetIds: string[];
   alternativePresetTags: string[];
   lastReviewedAt: string;
+  nextReviewAt: string;
 }
 
 export interface Checklist {
@@ -120,6 +124,14 @@ export interface Checklist {
   date: string;
   accountId: string;
   assetId: string;
+  buyReason: string;
+  trend: string;
+  overheated: string;
+  supply: string;
+  positionWeightMemo: string;
+  stopLossPlan: string;
+  targetPricePlan: string;
+  finalDecision: string;
   planned: boolean;
   fomo: boolean;
   averaging: boolean;

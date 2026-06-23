@@ -68,6 +68,9 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
     theses: (value.theses ?? []).map((thesis) => ({
       ...thesis,
       grade: thesis.grade === "exclude" ? "exclude" : thesis.grade ?? "B",
+      targetPrice: thesis.targetPrice ?? 0,
+      stopLossPrice: thesis.stopLossPrice ?? 0,
+      addBuyPrice: thesis.addBuyPrice ?? 0,
       holdingConditionTags: thesis.holdingConditionTags ?? thesis.summary?.filter(Boolean) ?? [],
       holdingMemo: thesis.holdingMemo ?? thesis.summary?.filter(Boolean).join("\n") ?? "",
       keyRiskTags: thesis.keyRiskTags ?? [],
@@ -78,11 +81,20 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
       partialSellConditionTags: thesis.partialSellConditionTags ?? [],
       fullExitConditionTags: thesis.fullExitConditionTags ?? [],
       alternativeAssetIds: thesis.alternativeAssetIds ?? [],
-      alternativePresetTags: thesis.alternativePresetTags ?? []
+      alternativePresetTags: thesis.alternativePresetTags ?? [],
+      nextReviewAt: thesis.nextReviewAt ?? thesis.lastReviewedAt ?? ""
     })),
     checklists: (value.checklists ?? []).map((checklist) => ({
       ...checklist,
       accountId: checklist.accountId ?? empty.accounts[0]?.id ?? "",
+      buyReason: checklist.buyReason ?? "",
+      trend: checklist.trend ?? "확인 안함",
+      overheated: checklist.overheated ?? "확인 안함",
+      supply: checklist.supply ?? "확인 안함",
+      positionWeightMemo: checklist.positionWeightMemo ?? "",
+      stopLossPlan: checklist.stopLossPlan ?? "",
+      targetPricePlan: checklist.targetPricePlan ?? "",
+      finalDecision: checklist.finalDecision ?? "",
       riskSizingChecked: checklist.riskSizingChecked ?? false,
       eventRiskChecked: checklist.eventRiskChecked ?? false,
       marketDefenseChecked: checklist.marketDefenseChecked ?? false
