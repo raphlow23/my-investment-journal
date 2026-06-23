@@ -22,7 +22,7 @@ const fetchText = async (url, encoding = "utf-8") => {
     }
   });
   const buffer = await response.arrayBuffer();
-  if (!response.ok) throw new Error(`조회 실패: ${response.status}`);
+  if (!response.ok) throw new Error(`Search failed: ${response.status}`);
   return new TextDecoder(encoding).decode(buffer);
 };
 
@@ -49,22 +49,43 @@ const parseJsonish = (text) => {
     return JSON.parse(trimmed);
   } catch {
     const match = trimmed.match(/^[^(]*\(([\s\S]*)\)\s*;?$/);
-    if (!match) throw new Error("자동완성 응답 해석 실패");
+    if (!match) throw new Error("Autocomplete response parse failed");
     return JSON.parse(match[1]);
   }
 };
 
-const collectNaverRows = (value, rows = []) => {
-  if (!Array.isArray(value)) return rows;
+const looksLikeName = (value, code) =>
+  value &&
+  value !== code &&
+  !/^\d+$/.test(value) &&
+  !/^https?:/i.test(value) &&
+  !/^[A-Z]{2,8}$/.test(value) &&
+  /[^\d\s.,:;|/\\()[\]{}_-]/.test(value);
 
-  if (value.every((item) => !Array.isArray(item) && (typeof item !== "object" || item === null))) {
+const collectNaverRows = (value, rows = []) => {
+  if (Array.isArray(value)) {
     const strings = value.map((item) => cleanText(item)).filter(Boolean);
     const code = strings.find((item) => /^\d{6}$/.test(item));
-    const name = strings.find((item) => item !== code && /[가-힣A-Za-z]/.test(item) && !/^\d+$/.test(item));
+    const name = strings.find((item) => looksLikeName(item, code));
     if (code && name) rows.push({ code, name, raw: strings.join(" ") });
+
+    value.forEach((item) => collectNaverRows(item, rows));
+    return rows;
   }
 
-  value.forEach((item) => collectNaverRows(item, rows));
+  if (value && typeof value === "object") {
+    const strings = Object.values(value).map((item) => cleanText(item)).filter(Boolean);
+    const code =
+      strings.find((item) => /^\d{6}$/.test(item)) ||
+      cleanText(value.code || value.itemCode || value.symbol || value.ticker);
+    const name =
+      cleanText(value.name || value.itemName || value.nm || value.korName || value.stockName) ||
+      strings.find((item) => looksLikeName(item, code));
+    if (/^\d{6}$/.test(code) && name) rows.push({ code, name, raw: strings.join(" ") });
+
+    Object.values(value).forEach((item) => collectNaverRows(item, rows));
+  }
+
   return rows;
 };
 
@@ -127,7 +148,7 @@ const searchYahooFinance = async (query) => {
     }
   });
   const data = await response.json();
-  if (!response.ok) throw new Error("Yahoo Finance 검색 실패");
+  if (!response.ok) throw new Error("Yahoo Finance search failed");
 
   const usExchanges = new Set(["NMS", "NYQ", "ASE", "PCX", "BTS", "NCM", "NGM"]);
   return (Array.isArray(data.quotes) ? data.quotes : [])
@@ -150,12 +171,12 @@ const searchYahooFinance = async (query) => {
 
 export const handler = async (event) => {
   if (event.httpMethod !== "GET") {
-    return { statusCode: 405, body: JSON.stringify({ error: "GET만 지원합니다." }) };
+    return { statusCode: 405, body: JSON.stringify({ error: "GET only" }) };
   }
 
   const ip = event.headers["x-forwarded-for"]?.split(",")[0]?.trim() || "local";
   if (limited(ip)) {
-    return { statusCode: 429, body: JSON.stringify({ error: "요청이 너무 많습니다. 잠시 후 다시 시도하세요." }) };
+    return { statusCode: 429, body: JSON.stringify({ error: "Too many requests. Try again shortly." }) };
   }
 
   const query = String(event.queryStringParameters?.q || "").trim();
