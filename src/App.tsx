@@ -1103,7 +1103,42 @@ const AccountPositionTable = ({
   if (!active.length) return <EmptyText text="해당 계좌 범위에 보유 종목이 없습니다." />;
 
   return (
-    <div className="overflow-x-auto">
+    <div className="grid gap-3">
+      <div className="grid gap-2 md:hidden">
+        {active.map((position) => {
+          const asset = state.assets.find((item) => item.id === position.assetId);
+          const thesis = state.theses.find((item) => item.assetId === position.assetId);
+          const needsReview = Boolean(thesis?.invalidationPrice && asset?.currentPrice && asset.currentPrice < thesis.invalidationPrice);
+          const hasPriceData = Boolean(asset && asset.currentPrice > 0 && (asset.currency === "KRW" || asset.currentFxRate > 0));
+          const hasCostData = position.averageCostKrw > 0;
+          return (
+            <div key={position.key} className="rounded-md border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-slate-950 dark:text-white">{asset?.name ?? "미등록 종목"}</p>
+                  <p className="mt-1 text-xs text-slate-500">{accountName(state.accounts, position.accountId)} · {asset?.market ?? "—"}</p>
+                </div>
+                {needsReview && <span className="shrink-0 rounded bg-amber-100 px-2 py-1 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-200">점검</span>}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <p><span className="text-slate-500">수량</span><br /><strong>{formatNumber(position.quantity, 4)}</strong></p>
+                <p><span className="text-slate-500">평균단가</span><br /><strong>{hasCostData ? formatKrw(position.averageCostKrw) : "—"}</strong></p>
+                <p><span className="text-slate-500">현재가</span><br /><strong>{hasPriceData ? (asset?.currency === "USD" ? `$${formatNumber(position.currentPrice, 2)}` : formatKrw(position.currentPrice)) : "데이터 부족"}</strong></p>
+                <p><span className="text-slate-500">평가금액</span><br /><strong>{hasPriceData ? formatKrw(position.marketValueKrw) : "데이터 부족"}</strong></p>
+                <p><span className="text-slate-500">평가손익</span><br /><strong className={position.unrealizedPnlKrw >= 0 ? "text-teal-700 dark:text-teal-300" : "text-red-600 dark:text-red-300"}>{hasPriceData && hasCostData ? formatKrw(position.unrealizedPnlKrw) : "—"}</strong></p>
+                <p><span className="text-slate-500">수익률</span><br /><strong>{hasPriceData && hasCostData ? formatPercent(position.unrealizedReturnRate) : "—"}</strong></p>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-slate-100 pt-3 text-xs dark:border-slate-800">
+                <p><span className="text-slate-500">목표가</span><br /><strong>{formatPlanPrice(thesis?.targetPrice, asset?.currency)}</strong></p>
+                <p><span className="text-slate-500">매도검토가</span><br /><strong>{formatPlanPrice(thesis?.invalidationPrice, asset?.currency)}</strong></p>
+                <p><span className="text-slate-500">투자등급</span><br /><strong>{thesis ? gradeLabels[thesis.grade] : "—"}</strong></p>
+                <p><span className="text-slate-500">다음 점검</span><br /><strong>{thesis?.nextReviewAt || thesis?.lastReviewedAt || "—"}</strong></p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="hidden max-w-full overflow-x-auto md:block">
       <table className="w-full min-w-[1320px] text-left text-sm">
         <thead>
           <tr className="border-b border-slate-200 dark:border-slate-800">
@@ -1170,6 +1205,7 @@ const AccountPositionTable = ({
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 };
