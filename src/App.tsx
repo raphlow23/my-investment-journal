@@ -279,7 +279,7 @@ const checklistResultLabels = {
 
 const syncStatusLabels: Record<CloudSyncStatus, string> = {
   local: "로컬 모드",
-  signed_out: "로그아웃",
+  signed_out: "Google 로그인 필요",
   syncing: "동기화 중",
   synced: "동기화 완료",
   offline: "오프라인",
