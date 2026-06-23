@@ -13,7 +13,19 @@ import {
 
 const emotionalStates = new Set(["fomo", "anxiety", "averaging_urge", "revenge", "loss_aversion"]);
 
-const tradeValueKrw = (trade: Trade) => trade.quantity * trade.price * trade.fxRate;
+const isUsdAsset = (asset?: { currency?: string; market?: Market }) =>
+  asset?.currency === "USD" || asset?.market === "US" || asset?.market === "ETF_US";
+
+const tradePriceCurrency = (trade: Trade, asset?: { currency?: string; market?: Market }) => {
+  if (trade.priceCurrency) return trade.priceCurrency;
+  if (!isUsdAsset(asset)) return "KRW";
+  return trade.fxRate && trade.fxRate > 10 ? "USD" : "KRW";
+};
+
+const tradeValueKrw = (trade: Trade, asset?: { currency?: string; market?: Market }) => {
+  const currency = tradePriceCurrency(trade, asset);
+  return trade.quantity * trade.price * (currency === "USD" ? trade.fxRate || 1 : 1);
+};
 
 export const calculatePositions = (state: AppState): Position[] => {
   const lots = new Map<
@@ -45,7 +57,8 @@ export const calculatePositions = (state: AppState): Position[] => {
           lastFxRate: trade.fxRate || 1
         };
 
-      const gross = tradeValueKrw(trade);
+      const asset = state.assets.find((item) => item.id === trade.assetId);
+      const gross = tradeValueKrw(trade, asset);
       if (trade.side === "buy") {
         const cost = gross + trade.fee + trade.tax;
         lot.quantity += trade.quantity;

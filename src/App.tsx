@@ -484,6 +484,39 @@ const defaultAssetClassForMarket = (market: Market): AssetClass =>
 const defaultBenchmarkForMarket = (market: Market) =>
   market === "US" ? "S&P500" : market === "ETF_US" ? "NASDAQ100" : "KOSPI200";
 
+const tradeAmountKrw = ({
+  quantity,
+  price,
+  priceCurrency,
+  fxRate,
+  fee,
+  foreignFee,
+  tax
+}: {
+  quantity: number;
+  price: number;
+  priceCurrency?: Currency;
+  fxRate: number;
+  fee: number;
+  foreignFee: number;
+  tax: number;
+}) => quantity * price * (priceCurrency === "USD" ? fxRate || 1 : 1) + fee + foreignFee * (fxRate || 1) + tax;
+
+const inferTradePriceCurrency = (trade: Trade, asset?: Asset): Currency => {
+  if (trade.priceCurrency) return trade.priceCurrency;
+  if (!asset || asset.currency !== "USD") return "KRW";
+  return trade.fxRate && trade.fxRate > 10 ? "USD" : "KRW";
+};
+
+const displayCurrentPrice = (asset: Asset | undefined, price: number, fxRate: number) => {
+  if (!asset || price <= 0) return "데이터 부족";
+  if (asset.currency === "USD") {
+    const krwPrice = fxRate > 0 ? formatKrw(price * fxRate) : "환율 부족";
+    return `$${formatNumber(price, 2)} / ${krwPrice}`;
+  }
+  return formatKrw(price);
+};
+
 const buildAssetFromTrade = ({
   name,
   market,
@@ -1238,7 +1271,7 @@ const AccountPositionTable = ({
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                 <p><span className="text-slate-500">수량</span><br /><strong>{formatNumber(position.quantity, 4)}</strong></p>
                 <p><span className="text-slate-500">평균단가</span><br /><strong>{hasCostData ? formatKrw(position.averageCostKrw) : "—"}</strong></p>
-                <p><span className="text-slate-500">현재가</span><br /><strong>{hasPriceData ? (asset?.currency === "USD" ? `$${formatNumber(position.currentPrice, 2)}` : formatKrw(position.currentPrice)) : "데이터 부족"}</strong></p>
+                <p><span className="text-slate-500">현재가</span><br /><strong>{hasPriceData ? displayCurrentPrice(asset, position.currentPrice, position.currentFxRate) : "데이터 부족"}</strong></p>
                 <p><span className="text-slate-500">평가금액</span><br /><strong>{hasPriceData ? formatKrw(position.marketValueKrw) : "데이터 부족"}</strong></p>
                 <p><span className="text-slate-500">평가손익</span><br /><strong className={position.unrealizedPnlKrw >= 0 ? "text-teal-700 dark:text-teal-300" : "text-red-600 dark:text-red-300"}>{hasPriceData && hasCostData ? formatKrw(position.unrealizedPnlKrw) : "—"}</strong></p>
                 <p><span className="text-slate-500">수익률</span><br /><strong>{hasPriceData && hasCostData ? formatPercent(position.unrealizedReturnRate) : "—"}</strong></p>
@@ -1296,7 +1329,7 @@ const AccountPositionTable = ({
                 <td className="px-3 py-2">{formatNumber(position.quantity, 4)}</td>
                 <td className="px-3 py-2">{hasCostData ? formatKrw(position.averageCostKrw) : "—"}</td>
                 <td className="px-3 py-2">
-                  <p>{hasPriceData ? (asset?.currency === "USD" ? `$${formatNumber(position.currentPrice, 2)}` : formatKrw(position.currentPrice)) : "데이터 부족"}</p>
+                  <p>{hasPriceData ? displayCurrentPrice(asset, position.currentPrice, position.currentFxRate) : "데이터 부족"}</p>
                   <p className={`text-xs ${asset?.priceUpdateError ? "text-amber-700 dark:text-amber-300" : "text-slate-500"}`}>
                     {asset?.priceSource === "api" ? "자동" : "수동"}
                     {asset?.priceUpdatedAt ? ` · ${asset.priceUpdatedAt.slice(0, 16).replace("T", " ")}` : ""}
@@ -1659,6 +1692,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     kind: "new" as TradeKind,
     quantity: 0,
     price: 0,
+    priceCurrency: "KRW" as Currency,
     foreignFee: 0,
     fee: 0,
     tax: 0,
@@ -1706,6 +1740,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       kind: trade.kind,
       quantity: trade.quantity,
       price: trade.price,
+      priceCurrency: trade.priceCurrency ?? (trade.fxRate && trade.fxRate > 10 ? "USD" : "KRW"),
       foreignFee: 0,
       fee: trade.fee,
       tax: trade.tax,
@@ -1737,7 +1772,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       : buildAssetFromTrade({
           name: draft.assetName,
           market: draft.market,
-          currentPrice: draft.price,
+          currentPrice: draft.priceCurrency === "USD" || !isUsMarket(draft.market) ? draft.price : 0,
           fxRate: draft.fxRate,
           ticker: draft.ticker,
           providerSymbol: draft.providerSymbol
@@ -1745,7 +1780,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     const asset = matchedAsset ?? newAsset!;
     const fxRate = draft.fxRate || (asset.currency === "KRW" ? 1 : asset.currentFxRate || 1);
     const feeBase = draft.fee + (draft.foreignFee ? draft.foreignFee * fxRate : 0);
-    const totalAmountKrw = draft.quantity * draft.price * fxRate + feeBase + draft.tax;
+    const totalAmountKrw = tradeAmountKrw({ ...draft, fxRate });
     const trade: Trade = {
       date: draft.date,
       accountId: draft.accountId,
@@ -1754,6 +1789,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       kind: draft.kind,
       quantity: draft.quantity,
       price: draft.price,
+      priceCurrency: draft.priceCurrency,
       fee: feeBase,
       tax: draft.tax,
       fxRate,
@@ -1785,7 +1821,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
         : newAsset ? "새 종목을 등록하고 체결 기록을 저장했습니다." : "체결 기록을 저장했습니다."
     );
     setEditingTradeId(null);
-    setDraft({ ...draft, quantity: 0, price: 0, foreignFee: 0, fee: 0, tax: 0, memo: "" });
+    setDraft({ ...draft, quantity: 0, price: 0, priceCurrency: "KRW", foreignFee: 0, fee: 0, tax: 0, memo: "" });
   };
 
   return (
@@ -1862,10 +1898,12 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="수량"><input className="field" type="number" value={draft.quantity} onChange={(event) => setDraft({ ...draft, quantity: inputNumber(event.target.value) })} /></Field>
-            <Field label="단가"><input className="field" type="number" value={draft.price} onChange={(event) => setDraft({ ...draft, price: inputNumber(event.target.value) })} /></Field>
+            <Field label={draft.priceCurrency === "USD" ? "단가(달러)" : "단가(원화)"}>
+              <input className="field" type="number" value={draft.price} onChange={(event) => setDraft({ ...draft, price: inputNumber(event.target.value) })} />
+            </Field>
           </div>
           <div className="rounded-md bg-slate-50 px-3 py-2 text-sm dark:bg-slate-950">
-            총 거래금액: {formatKrw(draft.quantity * draft.price * (draft.fxRate || 1) + draft.fee + draft.foreignFee * (draft.fxRate || 1) + draft.tax)}
+            총 거래금액: {formatKrw(tradeAmountKrw(draft))}
           </div>
           <div className="grid gap-3">
             <button className="secondary-button justify-self-start" type="button" onClick={() => setShowOptional((value) => !value)}>
@@ -1879,10 +1917,16 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
                     value={draft.market}
                     onChange={(event) => {
                       const market = event.target.value as Market;
-                      setDraft({ ...draft, market, fxRate: isUsMarket(market) ? draft.fxRate : 1 });
+                      setDraft({ ...draft, market, priceCurrency: "KRW", fxRate: isUsMarket(market) ? draft.fxRate : 1 });
                     }}
                   >
                     {Object.entries(marketLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </Field>
+                <Field label="단가 통화">
+                  <select className="field" value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value as Currency })}>
+                    <option value="KRW">KRW 원화</option>
+                    <option value="USD">USD 달러</option>
                   </select>
                 </Field>
                 <Field label="외화 수수료"><input className="field" type="number" value={draft.foreignFee} onChange={(event) => setDraft({ ...draft, foreignFee: inputNumber(event.target.value) })} placeholder="모르면 0" /></Field>
@@ -1916,13 +1960,26 @@ function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (tra
           if (accountFilter === "all") return true;
           return state.accounts.some((account) => account.id === trade.accountId && account.type === accountFilter);
         })
-        .map((trade) => ({
-          ...trade,
-          account: accountName(state.accounts, trade.accountId),
-          asset: trade.assetNameSnapshot || assetName(state.assets, trade.assetId),
-          market: trade.marketSnapshot || state.assets.find((asset) => asset.id === trade.assetId)?.market || "KR",
-          amount: trade.totalAmountKrw || trade.quantity * trade.price * trade.fxRate + trade.fee + trade.tax
-        })),
+        .map((trade) => {
+          const asset = state.assets.find((item) => item.id === trade.assetId);
+          const priceCurrency = inferTradePriceCurrency(trade, asset);
+          return {
+            ...trade,
+            priceCurrency,
+            account: accountName(state.accounts, trade.accountId),
+            asset: trade.assetNameSnapshot || assetName(state.assets, trade.assetId),
+            market: trade.marketSnapshot || asset?.market || "KR",
+            amount: tradeAmountKrw({
+              quantity: trade.quantity,
+              price: trade.price,
+              priceCurrency,
+              fxRate: trade.fxRate || 1,
+              fee: trade.fee,
+              foreignFee: 0,
+              tax: trade.tax
+            })
+          };
+        }),
     [state, accountFilter]
   );
   const columns = useMemo<ColumnDef<(typeof rows)[number]>[]>(
@@ -1934,7 +1991,7 @@ function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (tra
       { accessorFn: (row) => sideLabels[row.side], id: "side", header: "구분" },
       { accessorFn: (row) => tradeKindLabels[row.kind], id: "kind", header: "목적" },
       { accessorKey: "quantity", header: "수량" },
-      { accessorKey: "price", header: "단가" },
+      { accessorFn: (row) => row.priceCurrency === "USD" ? `$${formatNumber(row.price, 2)}` : formatKrw(row.price), id: "price", header: "단가" },
       { accessorFn: (row) => formatKrw(row.amount), id: "amount", header: "총 거래금액" },
       { accessorKey: "memo", header: "메모" },
       {
@@ -1995,7 +2052,7 @@ function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (tra
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <p><span className="text-slate-500">수량</span><br /><strong>{formatNumber(row.quantity, 4)}</strong></p>
-                  <p><span className="text-slate-500">단가</span><br /><strong>{formatNumber(row.price, 2)}</strong></p>
+                  <p><span className="text-slate-500">단가</span><br /><strong>{row.priceCurrency === "USD" ? `$${formatNumber(row.price, 2)}` : formatKrw(row.price)}</strong></p>
                   <p><span className="text-slate-500">거래금액</span><br /><strong>{formatKrw(row.amount)}</strong></p>
                   <p><span className="text-slate-500">시장</span><br /><strong>{row.market}</strong></p>
                 </div>

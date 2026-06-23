@@ -71,6 +71,7 @@ export interface Trade {
   kind: TradeKind;
   quantity: number;
   price: number;
+  priceCurrency?: Currency;
   fee: number;
   tax: number;
   fxRate: number;

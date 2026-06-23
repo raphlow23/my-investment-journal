@@ -4,6 +4,8 @@ const buckets = new Map();
 
 let kisToken = null;
 let kisTokenExpiresAt = 0;
+let usdKrwRate = null;
+let usdKrwRateExpiresAt = 0;
 
 const KIS_BASE_URL = process.env.KIS_BASE_URL || "https://openapi.koreainvestment.com:9443";
 const US_EXCHANGE_CODES = ["NAS", "NYS", "AMS"];
@@ -57,6 +59,19 @@ const numberFrom = (...values) => {
     if (Number.isFinite(number) && number > 0) return number;
   }
   return 0;
+};
+
+const getUsdKrwRate = async () => {
+  if (usdKrwRate && Date.now() < usdKrwRateExpiresAt) return usdKrwRate;
+
+  const response = await fetch("https://open.er-api.com/v6/latest/USD");
+  const data = await response.json();
+  const rate = numberFrom(data?.rates?.KRW);
+  if (!response.ok || !rate) throw new Error("USD/KRW 환율 조회 실패");
+
+  usdKrwRate = rate;
+  usdKrwRateExpiresAt = Date.now() + 30 * 60_000;
+  return rate;
 };
 
 const hasKisCredentials = () => Boolean(process.env.KIS_APP_KEY && process.env.KIS_APP_SECRET);
@@ -125,7 +140,7 @@ const quoteKisUs = async (symbol) => {
         SYMB: ticker
       });
       const price = numberFrom(output.last, output.base, output.ovrs_nmix_prpr, output.stck_prpr, output.price);
-      if (price) return { code: ticker, price, provider: `kis-${exchange}` };
+      if (price) return { code: ticker, price, fxRate: await getUsdKrwRate(), provider: `kis-${exchange}` };
       failures.push(`${exchange}: 가격 없음`);
     } catch (error) {
       failures.push(`${exchange}: ${error instanceof Error ? error.message : "조회 실패"}`);
@@ -194,7 +209,7 @@ const quoteWithFallback = async (market, symbol) => {
 
   try {
     if (isKorean) return await quoteNaverFinance(symbol);
-    return { code: symbol, price: await quoteTwelveData(symbol), provider: "twelve_data" };
+    return { code: symbol, price: await quoteTwelveData(symbol), fxRate: await getUsdKrwRate(), provider: "twelve_data" };
   } catch (error) {
     errors.push(error instanceof Error ? error.message : "대체 가격 조회 실패");
   }
@@ -237,7 +252,7 @@ export default async function handler(req, res) {
           market,
           price: result.price,
           currency: market === "KR" || market === "ETF_KR" ? "KRW" : item.currency || "USD",
-          fxRate: 1,
+          fxRate: result.fxRate || 1,
           source: "api",
           provider: result.provider,
           updatedAt: new Date().toISOString()

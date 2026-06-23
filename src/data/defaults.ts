@@ -38,6 +38,13 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
   const empty = createEmptyState();
   if (!value) return empty;
 
+  const inferTradePriceCurrency = (trade: NonNullable<typeof value.trades>[number]) => {
+    const asset = value.assets?.find((item) => item.id === trade.assetId);
+    const isUsdAsset = asset?.currency === "USD" || asset?.market === "US" || asset?.market === "ETF_US";
+    if (!isUsdAsset) return "KRW";
+    return trade.fxRate && trade.fxRate > 10 ? "USD" : "KRW";
+  };
+
   return {
     ...empty,
     ...value,
@@ -54,9 +61,11 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
     priceQuotes: value.priceQuotes ?? [],
     trades: (value.trades ?? []).map((trade) => {
       const asset = value.assets?.find((item) => item.id === trade.assetId);
+      const priceCurrency = trade.priceCurrency ?? inferTradePriceCurrency(trade);
       return {
         ...trade,
-        totalAmountKrw: trade.totalAmountKrw ?? trade.quantity * trade.price * trade.fxRate + trade.fee + trade.tax,
+        priceCurrency,
+        totalAmountKrw: trade.totalAmountKrw ?? trade.quantity * trade.price * (priceCurrency === "USD" ? trade.fxRate : 1) + trade.fee + trade.tax,
         assetNameSnapshot: trade.assetNameSnapshot ?? asset?.name ?? "",
         tickerSnapshot: trade.tickerSnapshot ?? asset?.ticker ?? "",
         marketSnapshot: trade.marketSnapshot ?? asset?.market ?? "KR",
