@@ -12,7 +12,7 @@ import {
 } from "firebase/auth";
 import {
   enableIndexedDbPersistence,
-  getFirestore,
+  initializeFirestore,
   type Firestore
 } from "firebase/firestore";
 
@@ -42,7 +42,9 @@ export const getFirebaseServices = () => {
   if (services) return services;
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
-  const db = getFirestore(app);
+  const db = initializeFirestore(app, {
+    ignoreUndefinedProperties: true
+  });
   services = { app, auth, db };
   if (!persistenceStarted) {
     persistenceStarted = true;
