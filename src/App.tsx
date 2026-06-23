@@ -1,6 +1,4 @@
 import {
-  ArrowDownToLine,
-  ArrowUpToLine,
   BarChart3,
   CheckCircle2,
   Cloud,
@@ -83,7 +81,6 @@ import {
   today
 } from "./lib/format";
 import { loadState, resetState, saveState } from "./lib/storage";
-import { backupStateToDrive, findBackupFile, requestDriveAccessToken, restoreStateFromDrive } from "./lib/googleDrive";
 import { downloadText, exportCsv, exportJson, exportMarkdown } from "./lib/exporters";
 import { buildManualQuote, refreshApiPrices } from "./lib/prices";
 import {
@@ -601,22 +598,11 @@ function App() {
     const cloud = await downloadCloudState(firebase.db, user.uid, local);
     const localHasData = hasUserData(local);
     const cloudHasData = hasUserData(cloud);
-    let mode: "upload" | "download" | "merge" | "cancel" = "merge";
-    if (localHasData && cloudHasData && !local.settings.cloudSync.enabled) {
-      const answer = window.prompt(
-        "기존 로컬 데이터와 클라우드 데이터가 모두 있습니다.\n1: 로컬 데이터를 클라우드에 업로드\n2: 클라우드 데이터를 로컬로 가져오기\n3: 병합하기\n4: 취소",
-        "3"
-      );
-      mode = answer === "1" ? "upload" : answer === "2" ? "download" : answer === "4" ? "cancel" : "merge";
-    } else if (localHasData && !cloudHasData) {
+    let mode: "upload" | "download" | "merge" = "merge";
+    if (localHasData && !cloudHasData) {
       mode = "upload";
     } else if (!localHasData && cloudHasData) {
       mode = "download";
-    }
-    if (mode === "cancel") {
-      setSyncStatus("conflict");
-      setSyncMessage("동기화 선택이 취소되었습니다.");
-      return;
     }
     await syncWithCloud(mode, user);
   };
@@ -814,14 +800,10 @@ function App() {
           <BackupView
             state={state}
             persist={persist}
-            setNotice={setNotice}
             fileInputRef={fileInputRef}
             firebaseUser={firebaseUser}
             syncStatus={syncStatus}
             syncMessage={syncMessage}
-            onConnectFirebase={connectFirebase}
-            onDisconnectFirebase={disconnectFirebase}
-            onSyncCloud={() => syncWithCloud("merge")}
           />
         )}
         {activeTab === "more" && (
@@ -832,14 +814,10 @@ function App() {
             updateState={updateState}
             metrics={metrics}
             persist={persist}
-            setNotice={setNotice}
             fileInputRef={fileInputRef}
             firebaseUser={firebaseUser}
             syncStatus={syncStatus}
             syncMessage={syncMessage}
-            onConnectFirebase={connectFirebase}
-            onDisconnectFirebase={disconnectFirebase}
-            onSyncCloud={() => syncWithCloud("merge")}
           />
         )}
       </main>
@@ -934,9 +912,9 @@ function Dashboard({
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">앱 사용 후 실제 체결된 매수·매도 기록을 저장합니다.</p>
             </button>
             <button className="rounded-md border border-slate-200 bg-white p-4 text-left transition hover:border-teal-500 hover:bg-teal-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500 dark:hover:bg-slate-950" type="button" onClick={onOpenBackup}>
-              <p className="font-bold text-slate-950 dark:text-white">Google Drive 백업 설정</p>
+              <p className="font-bold text-slate-950 dark:text-white">Google 자동 저장 상태</p>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {state.settings.driveSync.connected ? "연결됨" : "미연결"} · 마지막 백업 {state.settings.driveSync.lastBackupAt?.slice(0, 16).replace("T", " ") ?? "없음"}
+                상단 Google 로그인 후 같은 계정으로 자동 저장·불러오기를 사용합니다.
               </p>
             </button>
             <button className="rounded-md border border-slate-200 bg-white p-4 text-left transition hover:border-teal-500 hover:bg-teal-50 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-teal-500 dark:hover:bg-slate-950" type="button" onClick={onRefreshPrices} disabled={priceRefreshing}>
@@ -2116,14 +2094,10 @@ function MoreView({
   updateState,
   metrics,
   persist,
-  setNotice,
   fileInputRef,
   firebaseUser,
   syncStatus,
-  syncMessage,
-  onConnectFirebase,
-  onDisconnectFirebase,
-  onSyncCloud
+  syncMessage
 }: {
   section: MoreSectionKey | null;
   setSection: (section: MoreSectionKey | null) => void;
@@ -2131,14 +2105,10 @@ function MoreView({
   updateState: (producer: (current: AppState) => AppState, message?: string) => void;
   metrics: ReturnType<typeof calculateMetrics>;
   persist: (next: AppState, message?: string) => Promise<void>;
-  setNotice: (message: string) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   firebaseUser: User | null;
   syncStatus: CloudSyncStatus;
   syncMessage: string;
-  onConnectFirebase: () => Promise<void>;
-  onDisconnectFirebase: () => Promise<void>;
-  onSyncCloud: () => Promise<void>;
 }) {
   const cards: Array<{ key: MoreSectionKey; title: string; desc: string }> = [
     { key: "manage", title: "관리", desc: "계좌·종목 등록, 초기보유 준비" },
@@ -2179,14 +2149,10 @@ function MoreView({
         <BackupView
           state={state}
           persist={persist}
-          setNotice={setNotice}
           fileInputRef={fileInputRef}
           firebaseUser={firebaseUser}
           syncStatus={syncStatus}
           syncMessage={syncMessage}
-          onConnectFirebase={onConnectFirebase}
-          onDisconnectFirebase={onDisconnectFirebase}
-          onSyncCloud={onSyncCloud}
         />
       )}
     </div>
@@ -2277,121 +2243,18 @@ function MonthlyReviewView({ state, updateState, metrics }: { state: AppState; m
 function BackupView({
   state,
   persist,
-  setNotice,
   fileInputRef,
   firebaseUser,
   syncStatus,
-  syncMessage,
-  onConnectFirebase,
-  onDisconnectFirebase,
-  onSyncCloud
+  syncMessage
 }: {
   state: AppState;
   persist: (next: AppState, message?: string) => Promise<void>;
-  setNotice: (message: string) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   firebaseUser: User | null;
   syncStatus: CloudSyncStatus;
   syncMessage: string;
-  onConnectFirebase: () => Promise<void>;
-  onDisconnectFirebase: () => Promise<void>;
-  onSyncCloud: () => Promise<void>;
 }) {
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const connectDrive = async () => {
-    setBusy(true);
-    try {
-      const token = await requestDriveAccessToken();
-      const file = await findBackupFile(token);
-      await persist({
-        ...state,
-        settings: {
-          ...state.settings,
-          driveSync: {
-            connected: true,
-            fileId: file?.id,
-            lastDriveModifiedAt: file?.modifiedTime
-          }
-        }
-      }, file ? "Google Drive 백업 파일을 찾았습니다." : "Google Drive 연결이 준비되었습니다.");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Google Drive 연결에 실패했습니다.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const backupDrive = async () => {
-    if (!password) {
-      setNotice("백업 비밀번호를 입력하세요. 비밀번호를 잃어버리면 복구할 수 없습니다.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const token = await requestDriveAccessToken();
-      const file = await backupStateToDrive(token, state, password, state.settings.driveSync.fileId);
-      await persist({
-        ...state,
-        settings: {
-          ...state.settings,
-          driveSync: {
-            ...state.settings.driveSync,
-            connected: true,
-            fileId: file.id,
-            lastBackupAt: new Date().toISOString(),
-            lastDriveModifiedAt: file.modifiedTime
-          }
-        }
-      }, "암호화된 백업을 Google Drive appDataFolder에 저장했습니다.");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "백업에 실패했습니다.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const restoreDrive = async () => {
-    if (!password) {
-      setNotice("복원할 때도 같은 백업 비밀번호가 필요합니다.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const token = await requestDriveAccessToken();
-      const { file, state: driveState } = await restoreStateFromDrive(token, password);
-      if (!file || !driveState) {
-        setNotice("Google Drive에 백업 파일이 없습니다.");
-        return;
-      }
-      const localNewer = new Date(state.updatedAt).getTime() > new Date(file.modifiedTime).getTime();
-      if (localNewer) {
-        const keepLocal = window.confirm("로컬 데이터가 Drive 백업보다 최신입니다. 취소하면 로컬을 유지하고, 확인하면 Drive 데이터로 복원합니다.");
-        if (!keepLocal) {
-          setNotice("로컬 데이터를 유지했습니다.");
-          return;
-        }
-      }
-      await persist({
-        ...mergeWithDefaults(driveState),
-        settings: {
-          ...mergeWithDefaults(driveState).settings,
-          driveSync: {
-            connected: true,
-            fileId: file.id,
-            lastRestoreAt: new Date().toISOString(),
-            lastDriveModifiedAt: file.modifiedTime
-          }
-        }
-      }, "Google Drive 백업을 복원했습니다.");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "복원에 실패했습니다.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const importJson = async (file: File) => {
     const text = await file.text();
     const imported = mergeWithDefaults(JSON.parse(text));
@@ -2401,7 +2264,7 @@ function BackupView({
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <Section title="Firebase 자동 동기화" icon={<Cloud className="h-5 w-5 text-teal-700" />}>
+      <Section title="Google 계정 자동 저장" icon={<Cloud className="h-5 w-5 text-teal-700" />}>
         <div className="grid gap-3">
           <div className="rounded-md bg-slate-50 p-3 text-sm dark:bg-slate-950">
             <p><strong>로그인:</strong> {firebaseUser?.email ?? "로그인하지 않음"}</p>
@@ -2410,40 +2273,7 @@ function BackupView({
             {syncMessage && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{syncMessage}</p>}
           </div>
           <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
-            공용 PC에서는 오프라인 캐시와 자동 동기화를 사용하지 않는 것이 좋습니다. 증권사 계정, 비밀번호, API 키는 입력받지 않습니다.
-          </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {firebaseUser ? (
-              <>
-                <button className="primary-button" type="button" onClick={() => void onSyncCloud()}><Cloud className="h-4 w-4" />지금 동기화</button>
-                <button className="secondary-button" type="button" onClick={() => void onDisconnectFirebase()}>로그아웃</button>
-              </>
-            ) : (
-              <button className="primary-button" type="button" onClick={() => void onConnectFirebase()}><Cloud className="h-4 w-4" />Google 로그인</button>
-            )}
-          </div>
-        </div>
-      </Section>
-
-      <Section title="Google Drive 암호화 백업" icon={<Cloud className="h-5 w-5 text-teal-700" />}>
-        <div className="grid gap-3">
-          <div className="rounded-md bg-slate-50 p-3 text-sm dark:bg-slate-950">
-            <p><strong>연결 상태:</strong> {state.settings.driveSync.connected ? "연결됨" : "미연결"}</p>
-            <p><strong>마지막 백업:</strong> {state.settings.driveSync.lastBackupAt?.slice(0, 19).replace("T", " ") ?? "없음"}</p>
-            <p><strong>복원 상태:</strong> {state.settings.driveSync.lastRestoreAt ? "복원 완료" : "복원 기록 없음"}</p>
-            <p><strong>마지막 복원:</strong> {state.settings.driveSync.lastRestoreAt?.slice(0, 19).replace("T", " ") ?? "없음"}</p>
-            <p><strong>Drive 수정일:</strong> {state.settings.driveSync.lastDriveModifiedAt?.slice(0, 19).replace("T", " ") ?? "없음"}</p>
-          </div>
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
-            백업 비밀번호는 서버에 저장하지 않습니다. 잃어버리면 Drive에 있는 암호화 백업을 복구할 수 없습니다.
-          </div>
-          <Field label="백업 비밀번호">
-            <input className="field" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Drive 백업 암호화에만 사용" />
-          </Field>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <button className="secondary-button" type="button" disabled={busy} onClick={connectDrive}><Cloud className="h-4 w-4" />연결</button>
-            <button className="primary-button" type="button" disabled={busy} onClick={backupDrive}><ArrowUpToLine className="h-4 w-4" />수동 백업</button>
-            <button className="secondary-button" type="button" disabled={busy} onClick={restoreDrive}><ArrowDownToLine className="h-4 w-4" />수동 복원</button>
+            저장은 상단 오른쪽 Google 로그인 후 자동으로 진행됩니다. 같은 Google 계정으로 다른 PC나 웹앱에서 접속하면 같은 데이터를 불러옵니다.
           </div>
         </div>
       </Section>
@@ -2468,7 +2298,7 @@ function BackupView({
           }} />
           <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()}><Upload className="h-4 w-4" />JSON 가져오기</button>
           <button className="danger-button" type="button" onClick={async () => {
-            const ok = window.confirm("로컬 데이터를 초기화할까요? Drive 백업은 삭제되지 않습니다.");
+            const ok = window.confirm("이 기기의 로컬 데이터를 초기화할까요? Google 계정 자동 저장 데이터는 로그인 후 다시 불러올 수 있습니다.");
             if (ok) await persist(await resetState(), "로컬 데이터를 초기화했습니다.");
           }}>로컬 데이터 초기화</button>
           <p className="text-sm text-slate-500 dark:text-slate-400">앱은 매수·매도 결정을 자동으로 내리지 않습니다. 기록, 계산, 복기, 위험 점검만 돕습니다.</p>

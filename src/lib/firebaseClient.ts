@@ -64,7 +64,6 @@ export const listenToFirebaseUser = (callback: (user: User | null) => void) => {
 
 const createGoogleProvider = () => {
   const provider = new GoogleAuthProvider();
-  provider.addScope("https://www.googleapis.com/auth/drive.appdata");
   provider.setCustomParameters({
     prompt: "select_account"
   });
