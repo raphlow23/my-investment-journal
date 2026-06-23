@@ -1637,7 +1637,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
                 </div>
               </div>
               <p className="mt-1 text-xs text-slate-500">{marketLabels[asset.market]} · {asset.sector || "섹터 미입력"} · {asset.themes.join(", ") || "테마 미입력"}</p>
-              <p className="mt-1 text-xs text-slate-500">가격: {asset.market === "KR" || asset.market === "ETF_KR" ? "네이버 금융 자동 시도" : "Twelve Data 자동 시도"} · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
+              <p className="mt-1 text-xs text-slate-500">가격: 한국투자증권 Open API 우선 · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
             </div>
           ))}
           {!state.assets.length && <EmptyText text="등록된 종목이 없습니다." />}
@@ -2582,7 +2582,7 @@ function BackupView({
 
       <Section title="가격 업데이트 설정" icon={<RefreshCw className="h-5 w-5 text-teal-700" />}>
         <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-          가격 공급자는 Twelve Data 하나로 고정했습니다. 미국 주식/ETF만 자동 업데이트를 시도하고, 국내 주식·국내 ETF·환율은 수동 입력을 기본으로 유지합니다.
+          가격 공급자는 한국투자증권 Open API를 우선 사용합니다. 키가 없거나 조회에 실패하면 국내는 네이버 금융, 미국은 Twelve Data로 대체 조회를 시도합니다.
         </div>
       </Section>
 

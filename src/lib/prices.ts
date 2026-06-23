@@ -37,6 +37,9 @@ const categorizePriceFailure = (message: string) => {
   if (normalized.includes("ticker") || normalized.includes("symbol") || normalized.includes("종목코드") || normalized.includes("코드")) {
     return "종목코드 확인 필요";
   }
+  if (normalized.includes("kis") || normalized.includes("한국투자")) {
+    return "한국투자증권 조회 실패";
+  }
   if (normalized.includes("naver") || normalized.includes("네이버")) {
     return "국내 가격 조회 실패";
   }
@@ -57,7 +60,7 @@ const buildNoTargetMessage = (state: AppState) => {
     (asset) => apiMarkets.has(asset.market) && !asset.providerSymbol && !asset.ticker && !asset.name
   );
 
-  if (hasMissingTicker) return "종목코드 누락: 자동 가격 갱신에 필요한 종목명 또는 6자리 코드가 없습니다.";
+  if (hasMissingTicker) return "종목코드 누락: 자동 가격 갱신에 필요한 종목명 또는 코드가 없습니다.";
   if (!hasApiAsset) return "가격 갱신 대상 없음: 지원하는 시장의 보유 종목이 없습니다.";
   return "가격 갱신 대상 없음: 자동 가격 갱신 대상 종목을 찾지 못했습니다.";
 };
@@ -84,7 +87,7 @@ const postQuotes = (url: string, items: PriceRequestItem[]) =>
   fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "auto", symbols: items })
+    body: JSON.stringify({ provider: "kis", symbols: items })
   });
 
 const requestQuotes = async (items: PriceRequestItem[]) => {

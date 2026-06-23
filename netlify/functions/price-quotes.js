@@ -2,6 +2,12 @@ const WINDOW_MS = 60_000;
 const MAX_REQUESTS = 30;
 const buckets = new Map();
 
+let kisToken = null;
+let kisTokenExpiresAt = 0;
+
+const KIS_BASE_URL = process.env.KIS_BASE_URL || "https://openapi.koreainvestment.com:9443";
+const US_EXCHANGE_CODES = ["NAS", "NYS", "AMS"];
+
 const limited = (key) => {
   const now = Date.now();
   const bucket = buckets.get(key) ?? { count: 0, resetAt: now + WINDOW_MS };
@@ -14,16 +20,16 @@ const limited = (key) => {
   return bucket.count > MAX_REQUESTS;
 };
 
-const fetchText = async (url) => {
+const fetchText = async (url, encoding = "utf-8") => {
   const response = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0",
       "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
     }
   });
-  const text = await response.text();
+  const buffer = await response.arrayBuffer();
   if (!response.ok) throw new Error(`조회 실패: ${response.status}`);
-  return text;
+  return new TextDecoder(encoding).decode(buffer);
 };
 
 const cleanText = (value) =>
@@ -32,6 +38,89 @@ const cleanText = (value) =>
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
+
+const numberFrom = (...values) => {
+  for (const value of values) {
+    const number = Number(String(value ?? "").replace(/[^\d.-]/g, ""));
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return 0;
+};
+
+const hasKisCredentials = () => Boolean(process.env.KIS_APP_KEY && process.env.KIS_APP_SECRET);
+
+const getKisToken = async () => {
+  if (!hasKisCredentials()) throw new Error("KIS_APP_KEY 또는 KIS_APP_SECRET이 설정되지 않았습니다.");
+  if (kisToken && Date.now() < kisTokenExpiresAt - 60_000) return kisToken;
+
+  const response = await fetch(`${KIS_BASE_URL}/oauth2/tokenP`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      grant_type: "client_credentials",
+      appkey: process.env.KIS_APP_KEY,
+      appsecret: process.env.KIS_APP_SECRET
+    })
+  });
+  const data = await response.json();
+  if (!response.ok || !data.access_token) throw new Error(data.msg1 || data.error_description || "한국투자증권 토큰 발급 실패");
+
+  kisToken = data.access_token;
+  kisTokenExpiresAt = Date.now() + Number(data.expires_in || 86400) * 1000;
+  return kisToken;
+};
+
+const kisHeaders = async (trId) => ({
+  "Content-Type": "application/json; charset=utf-8",
+  authorization: `Bearer ${await getKisToken()}`,
+  appkey: process.env.KIS_APP_KEY,
+  appsecret: process.env.KIS_APP_SECRET,
+  tr_id: trId,
+  custtype: "P"
+});
+
+const kisFetch = async (path, trId, params) => {
+  const url = new URL(`${KIS_BASE_URL}${path}`);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  const response = await fetch(url, { headers: await kisHeaders(trId) });
+  const data = await response.json();
+  if (!response.ok || data.rt_cd === "1") throw new Error(data.msg1 || `한국투자증권 조회 실패: ${response.status}`);
+  return data.output || data;
+};
+
+const quoteKisDomestic = async (symbol) => {
+  const code = String(symbol || "").match(/\d{6}/)?.[0];
+  if (!code) throw new Error("국내 주식은 6자리 종목코드가 필요합니다.");
+  const output = await kisFetch("/uapi/domestic-stock/v1/quotations/inquire-price", "FHKST01010100", {
+    FID_COND_MRKT_DIV_CODE: "J",
+    FID_INPUT_ISCD: code
+  });
+  const price = numberFrom(output.stck_prpr, output.prpr, output.last);
+  if (!price) throw new Error("한국투자증권 국내 현재가를 받지 못했습니다.");
+  return { code, price, provider: "kis" };
+};
+
+const quoteKisUs = async (symbol) => {
+  const ticker = String(symbol || "").trim().toUpperCase();
+  if (!ticker) throw new Error("미국 주식 티커가 필요합니다.");
+
+  const failures = [];
+  for (const exchange of US_EXCHANGE_CODES) {
+    try {
+      const output = await kisFetch("/uapi/overseas-price/v1/quotations/price", "HHDFS00000300", {
+        AUTH: "",
+        EXCD: exchange,
+        SYMB: ticker
+      });
+      const price = numberFrom(output.last, output.base, output.ovrs_nmix_prpr, output.stck_prpr, output.price);
+      if (price) return { code: ticker, price, provider: `kis-${exchange}` };
+      failures.push(`${exchange}: 가격 없음`);
+    } catch (error) {
+      failures.push(`${exchange}: ${error instanceof Error ? error.message : "조회 실패"}`);
+    }
+  }
+  throw new Error(`한국투자증권 미국 현재가 조회 실패 (${failures.join(" / ")})`);
+};
 
 const quoteTwelveData = async (symbol) => {
   const key = process.env.TWELVE_DATA_API_KEY;
@@ -45,7 +134,9 @@ const quoteTwelveData = async (symbol) => {
   const data = await response.json();
   if (!response.ok || data.status === "error") throw new Error(data.message || "Twelve Data 조회 실패");
 
-  return Number(data.close ?? data.price ?? data.previous_close);
+  const price = numberFrom(data.close, data.price, data.previous_close);
+  if (!price) throw new Error("Twelve Data에서 유효한 가격을 받지 못했습니다.");
+  return price;
 };
 
 const resolveNaverCode = async (query) => {
@@ -55,9 +146,8 @@ const resolveNaverCode = async (query) => {
 
   const searchUrl = new URL("https://finance.naver.com/search/searchList.naver");
   searchUrl.searchParams.set("query", raw);
-
-  const html = await fetchText(searchUrl);
-  const links = [...html.matchAll(/href=["']\/item\/main\.naver\?code=(\d{6})["'][^>]*>([\s\S]*?)<\/a>/g)];
+  const html = await fetchText(searchUrl, "euc-kr");
+  const links = [...html.matchAll(/item\/main\.naver\?code=(\d{6})["'][^>]*>([\s\S]*?)<\/a>/g)];
   const normalized = raw.toLowerCase().replace(/\s+/g, "");
   const exact = links.find((match) => cleanText(match[2]).toLowerCase().replace(/\s+/g, "") === normalized);
   const selected = exact || links[0];
@@ -71,16 +161,33 @@ const quoteNaverFinance = async (query) => {
   const url = new URL("https://finance.naver.com/item/main.naver");
   url.searchParams.set("code", code);
 
-  const html = await fetchText(url);
+  const html = await fetchText(url, "euc-kr");
   const noToday = html.match(/<p class="no_today">([\s\S]*?)<\/p>/);
-  const priceText = noToday ? cleanText(noToday[1]) : "";
-  const price = Number(priceText.replace(/[^\d.]/g, ""));
+  const price = numberFrom(noToday ? cleanText(noToday[1]) : "");
+  if (!price) throw new Error("네이버 금융에서 유효한 현재가를 받지 못했습니다.");
+  return { code, price, provider: "naver" };
+};
 
-  if (!Number.isFinite(price) || price <= 0) {
-    throw new Error("네이버 금융에서 유효한 현재가를 받지 못했습니다.");
+const quoteWithFallback = async (market, symbol) => {
+  const errors = [];
+  const isKorean = market === "KR" || market === "ETF_KR";
+
+  if (hasKisCredentials()) {
+    try {
+      return isKorean ? await quoteKisDomestic(symbol) : await quoteKisUs(symbol);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "한국투자증권 조회 실패");
+    }
   }
 
-  return { code, price };
+  try {
+    if (isKorean) return await quoteNaverFinance(symbol);
+    return { code: symbol, price: await quoteTwelveData(symbol), provider: "twelve_data" };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : "대체 가격 조회 실패");
+  }
+
+  throw new Error(errors.join(" / ") || "가격 조회 실패");
 };
 
 export const handler = async (event) => {
@@ -109,12 +216,7 @@ export const handler = async (event) => {
       }
 
       try {
-        const result = market === "KR" || market === "ETF_KR"
-          ? await quoteNaverFinance(symbol)
-          : { code: symbol, price: await quoteTwelveData(symbol) };
-
-        if (!Number.isFinite(result.price) || result.price <= 0) throw new Error("유효한 가격을 받지 못했습니다.");
-
+        const result = await quoteWithFallback(market, symbol);
         quotes.push({
           instrumentId: item.instrumentId,
           ticker: result.code || item.ticker,
@@ -123,6 +225,7 @@ export const handler = async (event) => {
           currency: market === "KR" || market === "ETF_KR" ? "KRW" : item.currency || "USD",
           fxRate: 1,
           source: "api",
+          provider: result.provider,
           updatedAt: new Date().toISOString()
         });
       } catch (error) {
