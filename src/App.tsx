@@ -11,6 +11,7 @@ import {
   Save,
   ShieldAlert,
   Sun,
+  Trash2,
   Upload
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -92,6 +93,7 @@ import {
   signOutFirebase
 } from "./lib/firebaseClient";
 import {
+  cloudRecordId,
   downloadCloudState,
   hasUserData,
   mergeLocalAndCloud,
@@ -1535,6 +1537,50 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
     setAssetDraft({ ...assetDraft, name: "", sector: "", themes: "", currentPrice: 0 });
   };
 
+  const deleteAsset = (asset: Asset) => {
+    const linkedTradeCount = state.trades.filter((trade) => trade.assetId === asset.id).length;
+    if (linkedTradeCount > 0) {
+      window.alert(`${asset.name} 종목에 연결된 매매 기록이 ${linkedTradeCount}개 있습니다.\n매매 기록을 먼저 삭제한 뒤 종목을 삭제해주세요.`);
+      return;
+    }
+    if (!window.confirm(`${asset.name} 종목을 삭제할까요?\n보유·대응 기준과 관련 점검 기록도 함께 삭제됩니다.`)) return;
+
+    updateState((current) => {
+      const now = new Date().toISOString();
+      const deleteItems = [
+        { collection: "instruments" as const, id: asset.id, deletedAt: now },
+        ...current.theses.filter((item) => item.assetId === asset.id).map((item) => ({ collection: "positionPlans" as const, id: item.id, deletedAt: now })),
+        ...current.checklists.filter((item) => item.assetId === asset.id).map((item) => ({ collection: "preTradeChecklists" as const, id: item.id, deletedAt: now })),
+        ...current.swapReviews
+          .filter((item) => item.currentAssetId === asset.id || item.candidateAssetId === asset.id)
+          .map((item) => ({ collection: "switchReviews" as const, id: item.id, deletedAt: now })),
+        ...current.priceQuotes
+          .filter((item) => item.instrumentId === asset.id)
+          .map((item) => ({
+            collection: "priceSnapshots" as const,
+            id: cloudRecordId(item as unknown as Record<string, unknown>),
+            deletedAt: now
+          }))
+      ];
+      const pendingDeletes = [...(current.settings.cloudSync.pendingDeletes ?? []), ...deleteItems]
+        .filter((item, index, items) => items.findIndex((candidate) => candidate.collection === item.collection && candidate.id === item.id) === index)
+        .slice(-500);
+      return {
+        ...current,
+        assets: current.assets.filter((item) => item.id !== asset.id),
+        theses: current.theses.filter((item) => item.assetId !== asset.id),
+        checklists: current.checklists.filter((item) => item.assetId !== asset.id),
+        swapReviews: current.swapReviews.filter((item) => item.currentAssetId !== asset.id && item.candidateAssetId !== asset.id),
+        priceQuotes: current.priceQuotes.filter((item) => item.instrumentId !== asset.id),
+        settings: {
+          ...current.settings,
+          cloudSync: { ...current.settings.cloudSync, pendingDeletes }
+        }
+      };
+    }, `${asset.name} 종목을 삭제했습니다.`);
+    if (editingAssetId === asset.id) cancelEditAsset();
+  };
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Section title="계좌 등록">
@@ -1667,6 +1713,10 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
                   <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={() => startEditAsset(asset)}>
                     수정
                   </button>
+                  <button className="danger-button px-2 py-1 text-xs" type="button" onClick={() => deleteAsset(asset)} aria-label={`${asset.name} 삭제`}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    삭제
+                  </button>
                 </div>
               </div>
               <p className="mt-1 text-xs text-slate-500">{marketLabels[asset.market]} · {asset.sector || "섹터 미입력"} · {asset.themes.join(", ") || "테마 미입력"}</p>
@@ -1758,6 +1808,30 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     setEditingTradeId(null);
     setDraft(createTradeDraft());
     setShowOptional(false);
+  };
+
+  const deleteTrade = (trade: Trade) => {
+    const asset = state.assets.find((item) => item.id === trade.assetId);
+    const assetLabel = trade.assetNameSnapshot || asset?.name || "선택한 종목";
+    if (!window.confirm(`${trade.date} ${assetLabel} 매매 기록을 삭제할까요?\n삭제하면 보유 수량과 손익이 다시 계산됩니다.`)) return;
+    updateState((current) => {
+      const now = new Date().toISOString();
+      const pendingDeletes = [
+        ...(current.settings.cloudSync.pendingDeletes ?? []),
+        { collection: "tradeLogs" as const, id: trade.id, deletedAt: now }
+      ]
+        .filter((item, index, items) => items.findIndex((candidate) => candidate.collection === item.collection && candidate.id === item.id) === index)
+        .slice(-500);
+      return {
+        ...current,
+        trades: current.trades.filter((item) => item.id !== trade.id),
+        settings: {
+          ...current.settings,
+          cloudSync: { ...current.settings.cloudSync, pendingDeletes }
+        }
+      };
+    }, `${assetLabel} 매매 기록을 삭제했습니다.`);
+    if (editingTradeId === trade.id) cancelEditTrade();
   };
 
   const addTrade = (event: FormEvent) => {
@@ -1944,13 +2018,21 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
         </form>
       </Section>
       <Section title="매매 기록">
-        <TradeTable state={state} onEditTrade={startEditTrade} />
+        <TradeTable state={state} onEditTrade={startEditTrade} onDeleteTrade={deleteTrade} />
       </Section>
     </div>
   );
 }
 
-function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (trade: Trade) => void }) {
+function TradeTable({
+  state,
+  onEditTrade,
+  onDeleteTrade
+}: {
+  state: AppState;
+  onEditTrade: (trade: Trade) => void;
+  onDeleteTrade: (trade: Trade) => void;
+}) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [accountFilter, setAccountFilter] = useState<AccountType | "all">("all");
   const rows = useMemo(
@@ -1998,13 +2080,19 @@ function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (tra
         id: "actions",
         header: "",
         cell: ({ row }) => (
-          <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={() => onEditTrade(row.original)}>
-            수정
-          </button>
+          <div className="flex items-center gap-1">
+            <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={() => onEditTrade(row.original)}>
+              수정
+            </button>
+            <button className="danger-button px-2 py-1 text-xs" type="button" onClick={() => onDeleteTrade(row.original)} aria-label={`${row.original.asset} 매매 기록 삭제`}>
+              <Trash2 className="h-3.5 w-3.5" />
+              삭제
+            </button>
+          </div>
         )
       }
     ],
-    [onEditTrade]
+    [onDeleteTrade, onEditTrade]
   );
   const table = useReactTable({ data: rows, columns, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() });
 
@@ -2046,9 +2134,15 @@ function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (tra
                     <p className="truncate font-bold text-slate-950 dark:text-white">{row.asset}</p>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.date} · {row.account} · {sideLabels[row.side]} · {tradeKindLabels[row.kind]}</p>
                   </div>
-                  <button className="secondary-button shrink-0 px-2 py-1 text-xs" type="button" onClick={() => onEditTrade(row)}>
-                    수정
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={() => onEditTrade(row)}>
+                      수정
+                    </button>
+                    <button className="danger-button px-2 py-1 text-xs" type="button" onClick={() => onDeleteTrade(row)} aria-label={`${row.asset} 매매 기록 삭제`}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      삭제
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <p><span className="text-slate-500">수량</span><br /><strong>{formatNumber(row.quantity, 4)}</strong></p>

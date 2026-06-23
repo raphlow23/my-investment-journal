@@ -214,6 +214,13 @@ export interface CloudSyncMeta {
   enabled: boolean;
   lastSyncedAt?: string;
   lastError?: string;
+  pendingDeletes?: CloudDelete[];
+}
+
+export interface CloudDelete {
+  collection: "accounts" | "instruments" | "tradeLogs" | "positionPlans" | "priceSnapshots" | "preTradeChecklists" | "switchReviews" | "monthlyReviews";
+  id: string;
+  deletedAt: string;
 }
 
 export interface Settings {

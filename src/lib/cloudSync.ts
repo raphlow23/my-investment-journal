@@ -46,6 +46,8 @@ const newerRecord = <T extends SyncRecord>(local?: T, remote?: T): T | undefined
 const recordId = (record: SyncRecord) =>
   String(record.id || record.instrumentId && `${record.instrumentId}-${record.updatedAt || record.updatedAt || record.capturedAt || record.updatedAt || record.price || ""}` || crypto.randomUUID());
 
+export const cloudRecordId = (record: SyncRecord) => recordId(record);
+
 const mergeRecords = <T extends SyncRecord>(local: T[], remote: T[]) => {
   const merged = new Map<string, T>();
   local.forEach((item) => merged.set(recordId(item), item));
@@ -86,11 +88,15 @@ export const hasUserData = (state: AppState) =>
 
 export const downloadCloudState = async (db: Firestore, uid: string, localBase: AppState): Promise<AppState> => {
   const next: AppState = mergeWithDefaults({ ...localBase, accounts: [], assets: [], trades: [], theses: [], priceQuotes: [], checklists: [], swapReviews: [], monthlyReviews: [] });
+  const pendingDeletes = new Set(
+    (localBase.settings.cloudSync.pendingDeletes ?? []).map((item) => `${item.collection}:${item.id}`)
+  );
   for (const item of collectionMap) {
     const snap = await getDocs(collection(db, "users", uid, item.firestoreKey));
     const values = snap.docs
       .map((entry) => ({ id: entry.id, ...entry.data() }))
-      .filter((entry) => !(entry as SyncRecord).deletedAt);
+      .filter((entry) => !(entry as SyncRecord).deletedAt)
+      .filter((entry) => !pendingDeletes.has(`${item.firestoreKey}:${entry.id}`));
     (next[item.stateKey] as unknown[]) = values;
   }
   return mergeWithDefaults({
@@ -153,4 +159,18 @@ export const uploadStateToCloud = async (db: Firestore, uid: string, state: AppS
     }
     if (count > 0) await batch.commit();
   }
+
+  const pendingDeletes = state.settings.cloudSync.pendingDeletes ?? [];
+  let deleteBatch = writeBatch(db);
+  let deleteCount = 0;
+  for (const item of pendingDeletes) {
+    deleteBatch.delete(doc(db, "users", uid, item.collection, item.id));
+    deleteCount += 1;
+    if (deleteCount >= 400) {
+      await deleteBatch.commit();
+      deleteBatch = writeBatch(db);
+      deleteCount = 0;
+    }
+  }
+  if (deleteCount > 0) await deleteBatch.commit();
 };
