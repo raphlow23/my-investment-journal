@@ -61,6 +61,20 @@ const stampRecord = <T extends SyncRecord>(record: T): T & { updatedAt: string }
   updatedAt: String((record as Record<string, unknown>).updatedAt || (record as Record<string, unknown>).createdAt || new Date().toISOString())
 });
 
+const removeUndefinedFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => removeUndefinedFields(item)).filter((item) => item !== undefined);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, fieldValue]) => fieldValue !== undefined)
+        .map(([key, fieldValue]) => [key, removeUndefinedFields(fieldValue)])
+    );
+  }
+  return value;
+};
+
 export const hasUserData = (state: AppState) =>
   state.assets.length > 0 ||
   state.trades.length > 0 ||
@@ -128,7 +142,8 @@ export const uploadStateToCloud = async (db: Firestore, uid: string, state: AppS
     let count = 0;
     for (const record of records) {
       const id = recordId(record);
-      batch.set(doc(db, "users", uid, item.firestoreKey, id), stampRecord({ ...record, id }), { merge: true });
+      const safeRecord = removeUndefinedFields(stampRecord({ ...record, id })) as SyncRecord;
+      batch.set(doc(db, "users", uid, item.firestoreKey, id), safeRecord, { merge: true });
       count += 1;
       if (count >= 400) {
         await batch.commit();
