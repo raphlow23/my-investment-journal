@@ -1,11 +1,9 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import {
   GoogleAuthProvider,
-  getRedirectResult,
   getAuth,
   onAuthStateChanged,
   signInWithPopup,
-  signInWithRedirect,
   signOut,
   type Auth,
   type User
@@ -70,16 +68,10 @@ const createGoogleProvider = () => {
   return provider;
 };
 
-const popupFallbackCodes = new Set([
-  "auth/popup-blocked",
-  "auth/popup-closed-by-user",
-  "auth/cancelled-popup-request"
-]);
-
 export const getFirebaseAuthErrorMessage = (error: unknown) => {
   const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-  if (code === "auth/popup-blocked") return "팝업이 차단되어 전체 화면 로그인으로 전환합니다.";
-  if (code === "auth/popup-closed-by-user") return "로그인 창이 닫혔습니다. 다시 시도하면 전체 화면 로그인으로 전환합니다.";
+  if (code === "auth/popup-blocked") return "브라우저에서 팝업이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 Google 로그인을 다시 눌러 주세요.";
+  if (code === "auth/popup-closed-by-user") return "로그인 창이 닫혔습니다. Google 로그인을 다시 눌러 주세요.";
   if (code === "auth/cancelled-popup-request") return "이전 로그인 요청이 취소되었습니다. 다시 시도해 주세요.";
   return error instanceof Error ? error.message : "Google 로그인에 실패했습니다.";
 };
@@ -92,24 +84,6 @@ export const signInWithGoogle = async () => {
     const result = await signInWithPopup(firebase.auth, provider);
     return result.user;
   } catch (error) {
-    const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
-    if (popupFallbackCodes.has(code)) {
-      window.alert("팝업이 차단되어 전체 화면 로그인으로 전환합니다.");
-      await signInWithRedirect(firebase.auth, provider);
-      return null;
-    }
-    throw error;
-  }
-};
-
-export const handleRedirectLoginResult = async () => {
-  const firebase = getFirebaseServices();
-  if (!firebase) return null;
-  try {
-    const result = await getRedirectResult(firebase.auth);
-    return result?.user ?? null;
-  } catch (error) {
-    console.error("Redirect login error:", error);
     throw error;
   }
 };

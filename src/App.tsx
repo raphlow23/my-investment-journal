@@ -86,7 +86,6 @@ import { buildManualQuote, refreshApiPrices } from "./lib/prices";
 import {
   getFirebaseServices,
   getFirebaseAuthErrorMessage,
-  handleRedirectLoginResult,
   isFirebaseConfigured,
   listenToFirebaseUser,
   signInWithGoogle,
@@ -426,7 +425,6 @@ function App() {
   const latestStateRef = useRef(state);
   const applyingCloudRef = useRef(false);
   const autoSyncedUidRef = useRef("");
-  const redirectHandledRef = useRef(false);
 
   useEffect(() => {
     loadState()
@@ -466,22 +464,6 @@ function App() {
       void chooseAndSyncAfterLogin(firebaseUser);
     }
   }, [ready, firebaseUser]);
-
-  useEffect(() => {
-    if (!ready || redirectHandledRef.current) return;
-    redirectHandledRef.current = true;
-    handleRedirectLoginResult()
-      .then((user) => {
-        if (!user || autoSyncedUidRef.current === user.uid) return;
-        setFirebaseUser(user);
-        autoSyncedUidRef.current = user.uid;
-        void chooseAndSyncAfterLogin(user);
-      })
-      .catch((error) => {
-        setSyncStatus("error");
-        setNotice(getFirebaseAuthErrorMessage(error));
-      });
-  }, [ready]);
 
   useEffect(() => {
     if (!ready || !firebaseUser) return;
@@ -618,7 +600,7 @@ function App() {
       setSyncStatus("syncing");
       const user = await signInWithGoogle();
       if (user) await chooseAndSyncAfterLogin(user);
-      else setSyncMessage("팝업이 차단되어 전체 화면 로그인으로 전환합니다.");
+      else setSyncMessage("팝업을 허용한 뒤 Google 로그인을 다시 눌러 주세요.");
     } catch (error) {
       setSyncStatus("error");
       setNotice(getFirebaseAuthErrorMessage(error));
