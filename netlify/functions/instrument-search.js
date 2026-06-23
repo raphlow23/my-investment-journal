@@ -14,16 +14,16 @@ const limited = (key) => {
   return bucket.count > MAX_REQUESTS;
 };
 
-const fetchText = async (url) => {
+const fetchText = async (url, encoding = "utf-8") => {
   const response = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0",
       "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
     }
   });
-  const text = await response.text();
+  const buffer = await response.arrayBuffer();
   if (!response.ok) throw new Error(`조회 실패: ${response.status}`);
-  return text;
+  return new TextDecoder(encoding).decode(buffer);
 };
 
 const cleanText = (value) =>
@@ -43,26 +43,74 @@ const uniqueBy = (items, keyFn) => {
   });
 };
 
-const searchNaverFinance = async (query) => {
+const parseJsonish = (text) => {
+  const trimmed = text.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const match = trimmed.match(/^[^(]*\(([\s\S]*)\)\s*;?$/);
+    if (!match) throw new Error("자동완성 응답 해석 실패");
+    return JSON.parse(match[1]);
+  }
+};
+
+const collectNaverRows = (value, rows = []) => {
+  if (!Array.isArray(value)) return rows;
+
+  if (value.every((item) => !Array.isArray(item) && (typeof item !== "object" || item === null))) {
+    const strings = value.map((item) => cleanText(item)).filter(Boolean);
+    const code = strings.find((item) => /^\d{6}$/.test(item));
+    const name = strings.find((item) => item !== code && /[가-힣A-Za-z]/.test(item) && !/^\d+$/.test(item));
+    if (code && name) rows.push({ code, name, raw: strings.join(" ") });
+  }
+
+  value.forEach((item) => collectNaverRows(item, rows));
+  return rows;
+};
+
+const naverItem = ({ code, name, raw }) => {
+  const isEtf = /\bETF\b/i.test(raw) || /ETF/i.test(name);
+  return {
+    name,
+    ticker: code,
+    providerSymbol: code,
+    market: isEtf ? "ETF_KR" : "KR",
+    currency: "KRW",
+    country: "KR",
+    assetClass: isEtf ? "etf" : "stock",
+    source: "naver"
+  };
+};
+
+const searchNaverAutocomplete = async (query) => {
+  const url = new URL("https://ac.finance.naver.com/ac");
+  url.searchParams.set("q", query);
+  url.searchParams.set("q_enc", "UTF-8");
+  url.searchParams.set("st", "111");
+  url.searchParams.set("r_lt", "111");
+
+  const text = await fetchText(url);
+  const data = parseJsonish(text);
+  return uniqueBy(collectNaverRows(data), (item) => item.code).slice(0, 10).map(naverItem);
+};
+
+const searchNaverFinanceHtml = async (query) => {
   const url = new URL("https://finance.naver.com/search/searchList.naver");
   url.searchParams.set("query", query);
-  const html = await fetchText(url);
-  const matches = [...html.matchAll(/href=["']\/item\/main\.naver\?code=(\d{6})["'][^>]*>([\s\S]*?)<\/a>/g)];
+  const html = await fetchText(url, "euc-kr");
+  const matches = [...html.matchAll(/item\/main\.naver\?code=(\d{6})["'][^>]*>([\s\S]*?)<\/a>/g)];
 
   return uniqueBy(matches, (match) => match[1]).slice(0, 10).map((match) => {
     const code = match[1];
     const name = cleanText(match[2]);
-    return {
-      name,
-      ticker: code,
-      providerSymbol: code,
-      market: "KR",
-      currency: "KRW",
-      country: "KR",
-      assetClass: "stock",
-      source: "naver"
-    };
+    return naverItem({ code, name, raw: name });
   });
+};
+
+const searchNaverFinance = async (query) => {
+  const autocompleteItems = await searchNaverAutocomplete(query).catch(() => []);
+  if (autocompleteItems.length) return autocompleteItems;
+  return searchNaverFinanceHtml(query).catch(() => []);
 };
 
 const searchYahooFinance = async (query) => {
