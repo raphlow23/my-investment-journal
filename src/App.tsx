@@ -682,26 +682,26 @@ function App() {
   return (
     <div className="min-h-screen bg-paper text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
-          <div>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-3 sm:gap-3 sm:px-4">
+          <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-normal text-teal-700 dark:text-teal-400">
               로컬 우선 매매일지
             </p>
-            <h1 className="text-xl font-black text-slate-950 dark:text-white">My Investment Journal</h1>
+            <h1 className="truncate text-lg font-black text-slate-950 dark:text-white sm:text-xl">My Investment Journal</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="hidden text-right text-xs text-slate-500 dark:text-slate-400 sm:block">
-              <p className="font-semibold text-slate-700 dark:text-slate-200">{firebaseUser?.email ?? "로컬 사용자"}</p>
-              <p>{syncStatusLabels[syncStatus]}</p>
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="hidden max-w-[360px] truncate text-right text-xs text-slate-500 dark:text-slate-400 sm:block">
+              <span className="font-semibold text-slate-700 dark:text-slate-200">{firebaseUser?.email ?? "로컬 사용자"}</span>
+              <span> · {syncStatusLabels[syncStatus]}</span>
             </div>
             {firebaseUser ? (
-              <button className="secondary-button" type="button" onClick={() => void disconnectFirebase()}>
-                <Cloud className="h-4 w-4" />
+              <button className="secondary-button whitespace-nowrap px-2.5 sm:px-3" type="button" onClick={() => void disconnectFirebase()}>
+                <Cloud className="h-4 w-4 shrink-0" />
                 로그아웃
               </button>
             ) : (
-              <button className="secondary-button" type="button" onClick={() => void connectFirebase()}>
-                <Cloud className="h-4 w-4" />
+              <button className="secondary-button whitespace-nowrap px-2.5 sm:px-3" type="button" onClick={() => void connectFirebase()}>
+                <Cloud className="h-4 w-4 shrink-0" />
                 Google 로그인
               </button>
             )}
@@ -741,7 +741,7 @@ function App() {
         </nav>
       </header>
 
-      <main className="mx-auto grid max-w-7xl gap-4 px-4 py-5">
+      <main className="mx-auto grid max-w-7xl gap-4 px-3 py-4 sm:px-4 sm:py-5">
         {notice && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-900 dark:border-teal-900 dark:bg-teal-950 dark:text-teal-100">
             <span>{notice}</span>
@@ -927,7 +927,7 @@ function Dashboard({
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="총 평가금액" value={dataGapCount ? "데이터 부족" : formatKrw(scopedMetrics.totalMarketValue)} />
         <MetricCard label="총 평가손익" value={dataGapCount ? "데이터 부족" : formatKrw(scopedMetrics.unrealizedPnl)} tone={scopedMetrics.unrealizedPnl >= 0 ? "good" : "bad"} />
         <MetricCard label="원가기준 누적수익률" value={hasCostBasis ? formatPercent(scopedMetrics.totalReturnRate) : "—"} tone={scopedMetrics.totalReturnRate >= 0 ? "good" : "bad"} />
@@ -1424,7 +1424,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
 
 function Trades({ state, updateState }: { state: AppState; updateState: (producer: (current: AppState) => AppState, message?: string) => void }) {
   const [showOptional, setShowOptional] = useState(false);
-  const [draft, setDraft] = useState({
+  const createTradeDraft = () => ({
     date: today(),
     accountId: state.accounts[0]?.id ?? "",
     assetId: state.assets[0]?.id ?? "",
@@ -1442,6 +1442,8 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     emotion: "planned" as Emotion,
     memo: ""
   });
+  const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
+  const [draft, setDraft] = useState(createTradeDraft);
 
   useEffect(() => {
     const handler = () => {
@@ -1462,6 +1464,37 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       market: current.market || firstAsset?.market || "KR"
     }));
   }, [state.accounts, state.assets]);
+
+  const startEditTrade = (trade: Trade) => {
+    const asset = state.assets.find((item) => item.id === trade.assetId);
+    setEditingTradeId(trade.id);
+    setShowOptional(true);
+    setDraft({
+      date: trade.date,
+      accountId: trade.accountId,
+      assetId: trade.assetId,
+      assetName: trade.assetNameSnapshot || asset?.name || "",
+      market: trade.marketSnapshot || asset?.market || "KR",
+      side: trade.side,
+      kind: trade.kind,
+      quantity: trade.quantity,
+      price: trade.price,
+      foreignFee: 0,
+      fee: trade.fee,
+      tax: trade.tax,
+      fxRate: trade.fxRate || 1,
+      horizon: trade.horizon,
+      emotion: trade.emotion,
+      memo: trade.memo
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelEditTrade = () => {
+    setEditingTradeId(null);
+    setDraft(createTradeDraft());
+    setShowOptional(false);
+  };
 
   const addTrade = (event: FormEvent) => {
     event.preventDefault();
@@ -1504,28 +1537,40 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       riskMemo: "",
       reviewMemo: "",
       memo: draft.memo,
-      id: createId("trade"),
-      createdAt: new Date().toISOString()
+      id: editingTradeId ?? createId("trade"),
+      createdAt: state.trades.find((item) => item.id === editingTradeId)?.createdAt ?? new Date().toISOString()
     };
     updateState(
       (current) => ({
         ...current,
         assets: newAsset ? [...current.assets, newAsset] : current.assets,
-        trades: [...current.trades, trade]
+        trades: editingTradeId
+          ? current.trades.map((item) => (item.id === editingTradeId ? trade : item))
+          : [...current.trades, trade]
       }),
-      newAsset ? "새 종목을 등록하고 체결 기록을 저장했습니다." : "체결 기록을 저장했습니다."
+      editingTradeId
+        ? "매매 기록을 수정했습니다."
+        : newAsset ? "새 종목을 등록하고 체결 기록을 저장했습니다." : "체결 기록을 저장했습니다."
     );
+    setEditingTradeId(null);
     setDraft({ ...draft, quantity: 0, price: 0, foreignFee: 0, fee: 0, tax: 0, memo: "" });
   };
 
   return (
     <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-      <Section title={draft.kind === "initial_holding" ? "초기보유 입력" : "매매 입력"}>
+      <Section title={editingTradeId ? "매매 수정" : draft.kind === "initial_holding" ? "초기보유 입력" : "매매 입력"}>
         <form className="grid gap-3" onSubmit={addTrade}>
-          <button className="secondary-button justify-self-start" type="button" onClick={() => setDraft({ ...draft, side: "buy", kind: "initial_holding" })}>
-            <Plus className="h-4 w-4" />
-            초기보유 입력
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" type="button" onClick={() => setDraft({ ...draft, side: "buy", kind: "initial_holding" })}>
+              <Plus className="h-4 w-4" />
+              초기보유 입력
+            </button>
+            {editingTradeId && (
+              <button className="secondary-button" type="button" onClick={cancelEditTrade}>
+                수정 취소
+              </button>
+            )}
+          </div>
           <div className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
             {draft.kind === "initial_holding"
               ? "초기보유는 앱 사용 전 이미 보유한 종목의 시작 수량과 원가를 넣는 용도입니다."
@@ -1608,18 +1653,18 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
           </div>
           <button className="primary-button" type="submit">
             <Save className="h-4 w-4" />
-            {draft.kind === "initial_holding" ? "초기보유 저장" : "매매 저장"}
+            {editingTradeId ? "수정 저장" : draft.kind === "initial_holding" ? "초기보유 저장" : "매매 저장"}
           </button>
         </form>
       </Section>
       <Section title="매매 기록">
-        <TradeTable state={state} />
+        <TradeTable state={state} onEditTrade={startEditTrade} />
       </Section>
     </div>
   );
 }
 
-function TradeTable({ state }: { state: AppState }) {
+function TradeTable({ state, onEditTrade }: { state: AppState; onEditTrade: (trade: Trade) => void }) {
   const [sorting, setSorting] = useState<SortingState>([{ id: "date", desc: true }]);
   const [accountFilter, setAccountFilter] = useState<AccountType | "all">("all");
   const rows = useMemo(
@@ -1649,9 +1694,18 @@ function TradeTable({ state }: { state: AppState }) {
       { accessorKey: "quantity", header: "수량" },
       { accessorKey: "price", header: "단가" },
       { accessorFn: (row) => formatKrw(row.amount), id: "amount", header: "총 거래금액" },
-      { accessorKey: "memo", header: "메모" }
+      { accessorKey: "memo", header: "메모" },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row }) => (
+          <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={() => onEditTrade(row.original)}>
+            수정
+          </button>
+        )
+      }
     ],
-    []
+    [onEditTrade]
   );
   const table = useReactTable({ data: rows, columns, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() });
 
@@ -1684,30 +1738,54 @@ function TradeTable({ state }: { state: AppState }) {
       {!rows.length ? (
         <EmptyText text="해당 계좌 범위의 매매 기록이 없습니다." />
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-left text-sm">
-            <thead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id} className="border-b border-slate-200 dark:border-slate-800">
-                  {headerGroup.headers.map((header) => (
-                    <th key={header.id} className="px-3 py-2 font-bold">
-                      <button type="button" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}</button>
-                    </th>
-                  ))}
-                </tr>
-              ))}
-            </thead>
-            <tbody>
-              {table.getRowModel().rows.map((row) => (
-                <tr key={row.id} className="border-b border-slate-100 dark:border-slate-800">
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="max-w-64 truncate px-3 py-2">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="grid gap-2 md:hidden">
+            {rows.map((row) => (
+              <div key={row.id} className="rounded-md border border-slate-200 bg-white p-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-slate-950 dark:text-white">{row.asset}</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{row.date} · {row.account} · {sideLabels[row.side]} · {tradeKindLabels[row.kind]}</p>
+                  </div>
+                  <button className="secondary-button shrink-0 px-2 py-1 text-xs" type="button" onClick={() => onEditTrade(row)}>
+                    수정
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <p><span className="text-slate-500">수량</span><br /><strong>{formatNumber(row.quantity, 4)}</strong></p>
+                  <p><span className="text-slate-500">단가</span><br /><strong>{formatNumber(row.price, 2)}</strong></p>
+                  <p><span className="text-slate-500">거래금액</span><br /><strong>{formatKrw(row.amount)}</strong></p>
+                  <p><span className="text-slate-500">시장</span><br /><strong>{row.market}</strong></p>
+                </div>
+                {row.memo && <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{row.memo}</p>}
+              </div>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <tr key={headerGroup.id} className="border-b border-slate-200 dark:border-slate-800">
+                    {headerGroup.headers.map((header) => (
+                      <th key={header.id} className="px-3 py-2 font-bold">
+                        <button type="button" onClick={header.column.getToggleSortingHandler()}>{flexRender(header.column.columnDef.header, header.getContext())}</button>
+                      </th>
+                    ))}
+                  </tr>
+                ))}
+              </thead>
+              <tbody>
+                {table.getRowModel().rows.map((row) => (
+                  <tr key={row.id} className="border-b border-slate-100 dark:border-slate-800">
+                    {row.getVisibleCells().map((cell) => (
+                      <td key={cell.id} className="max-w-64 truncate px-3 py-2">{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
