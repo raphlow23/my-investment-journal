@@ -15,6 +15,11 @@ npm run dev
 
 Firebase Console에서 웹 앱을 만들고 Authentication의 Google 로그인을 켭니다. Firestore Database를 만든 뒤 `firestore.rules` 내용을 보안 규칙에 적용합니다.
 
+Authentication의 Authorized domains에 다음 주소가 포함되어 있어야 합니다.
+
+- 개발: `localhost`
+- 배포: `my-investment-journal.vercel.app` 또는 실제 배포 도메인
+
 `.env.example`을 참고해 `.env`에 Firebase 웹 앱 설정을 입력합니다.
 
 ```bash
@@ -38,6 +43,8 @@ Firestore 저장 경로는 사용자별로 분리됩니다.
 - `users/{uid}/monthlyReviews`
 
 로그인하지 않으면 기존처럼 IndexedDB 로컬 모드로 동작합니다. 로그인하면 로컬 데이터 업로드, 클라우드 데이터 가져오기, 병합, 취소 중 하나를 선택할 수 있습니다.
+
+Google 로그인은 `signInWithPopup`을 먼저 실행하고, Whale 브라우저나 팝업 차단 환경에서 막히면 `signInWithRedirect`로 자동 전환합니다. Google Drive appDataFolder 확장을 위해 Firebase Google provider에도 `https://www.googleapis.com/auth/drive.appdata` scope를 포함합니다.
 
 ## 빌드
 

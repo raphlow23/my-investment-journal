@@ -1,8 +1,10 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import {
   GoogleAuthProvider,
+  getRedirectResult,
   getAuth,
   onAuthStateChanged,
+  signInWithPopup,
   signInWithRedirect,
   signOut,
   type Auth,
@@ -58,12 +60,47 @@ export const listenToFirebaseUser = (callback: (user: User | null) => void) => {
   return onAuthStateChanged(firebase.auth, callback);
 };
 
+const createGoogleProvider = () => {
+  const provider = new GoogleAuthProvider();
+  provider.addScope("https://www.googleapis.com/auth/drive.appdata");
+  provider.setCustomParameters({
+    prompt: "select_account"
+  });
+  return provider;
+};
+
 export const signInWithGoogle = async () => {
   const firebase = getFirebaseServices();
   if (!firebase) throw new Error("Firebase 설정이 없습니다. .env에 Firebase 웹 앱 설정을 입력하세요.");
-  const provider = new GoogleAuthProvider();
-  await signInWithRedirect(firebase.auth, provider);
-  return null;
+  const provider = createGoogleProvider();
+  try {
+    const result = await signInWithPopup(firebase.auth, provider);
+    return result.user;
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+    if (
+      code === "auth/popup-blocked" ||
+      code === "auth/popup-closed-by-user" ||
+      code === "auth/cancelled-popup-request"
+    ) {
+      window.alert("팝업이 차단되어 전체 화면 로그인으로 전환합니다.");
+      await signInWithRedirect(firebase.auth, provider);
+      return null;
+    }
+    throw error;
+  }
+};
+
+export const handleRedirectLoginResult = async () => {
+  const firebase = getFirebaseServices();
+  if (!firebase) return null;
+  try {
+    const result = await getRedirectResult(firebase.auth);
+    return result?.user ?? null;
+  } catch (error) {
+    console.error("Redirect login error:", error);
+    throw error;
+  }
 };
 
 export const signOutFirebase = async () => {

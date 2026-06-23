@@ -88,6 +88,7 @@ import { downloadText, exportCsv, exportJson, exportMarkdown } from "./lib/expor
 import { buildManualQuote, refreshApiPrices } from "./lib/prices";
 import {
   getFirebaseServices,
+  handleRedirectLoginResult,
   isFirebaseConfigured,
   listenToFirebaseUser,
   signInWithGoogle,
@@ -427,6 +428,7 @@ function App() {
   const latestStateRef = useRef(state);
   const applyingCloudRef = useRef(false);
   const autoSyncedUidRef = useRef("");
+  const redirectHandledRef = useRef(false);
 
   useEffect(() => {
     loadState()
@@ -466,6 +468,22 @@ function App() {
       void chooseAndSyncAfterLogin(firebaseUser);
     }
   }, [ready, firebaseUser]);
+
+  useEffect(() => {
+    if (!ready || redirectHandledRef.current) return;
+    redirectHandledRef.current = true;
+    handleRedirectLoginResult()
+      .then((user) => {
+        if (!user || autoSyncedUidRef.current === user.uid) return;
+        setFirebaseUser(user);
+        autoSyncedUidRef.current = user.uid;
+        void chooseAndSyncAfterLogin(user);
+      })
+      .catch((error) => {
+        setSyncStatus("error");
+        setNotice(error instanceof Error ? error.message : "Redirect 로그인 처리에 실패했습니다.");
+      });
+  }, [ready]);
 
   useEffect(() => {
     if (!ready || !firebaseUser) return;
@@ -611,8 +629,9 @@ function App() {
       setNotice("");
       setSyncMessage("");
       setSyncStatus("syncing");
-      await signInWithGoogle();
-      setSyncMessage("Google 로그인 화면으로 이동합니다.");
+      const user = await signInWithGoogle();
+      if (user) await chooseAndSyncAfterLogin(user);
+      else setSyncMessage("팝업이 차단되어 전체 화면 로그인으로 전환합니다.");
     } catch (error) {
       setSyncStatus("error");
       setNotice(error instanceof Error ? error.message : "Google 로그인에 실패했습니다.");
