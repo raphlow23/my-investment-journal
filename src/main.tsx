@@ -11,7 +11,18 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((registration) => {
+        void registration.update();
+        if (registration.waiting) {
+          registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        }
+      })
+      .catch(() => undefined);
+  });
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    window.location.reload();
   });
 } else if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistrations().then((registrations) => {
