@@ -14,18 +14,6 @@ const limited = (key) => {
   return bucket.count > MAX_REQUESTS;
 };
 
-const fetchText = async (url, encoding = "utf-8") => {
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-    }
-  });
-  const buffer = await response.arrayBuffer();
-  if (!response.ok) throw new Error(`Search failed: ${response.status}`);
-  return new TextDecoder(encoding).decode(buffer);
-};
-
 const cleanText = (value) =>
   String(value || "")
     .replace(/<[^>]+>/g, "")
@@ -43,52 +31,6 @@ const uniqueBy = (items, keyFn) => {
   });
 };
 
-const parseJsonish = (text) => {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const match = trimmed.match(/^[^(]*\(([\s\S]*)\)\s*;?$/);
-    if (!match) throw new Error("Autocomplete response parse failed");
-    return JSON.parse(match[1]);
-  }
-};
-
-const looksLikeName = (value, code) =>
-  value &&
-  value !== code &&
-  !/^\d+$/.test(value) &&
-  !/^https?:/i.test(value) &&
-  !/^[A-Z]{2,8}$/.test(value) &&
-  /[^\d\s.,:;|/\\()[\]{}_-]/.test(value);
-
-const collectNaverRows = (value, rows = []) => {
-  if (Array.isArray(value)) {
-    const strings = value.map((item) => cleanText(item)).filter(Boolean);
-    const code = strings.find((item) => /^\d{6}$/.test(item));
-    const name = strings.find((item) => looksLikeName(item, code));
-    if (code && name) rows.push({ code, name, raw: strings.join(" ") });
-
-    value.forEach((item) => collectNaverRows(item, rows));
-    return rows;
-  }
-
-  if (value && typeof value === "object") {
-    const strings = Object.values(value).map((item) => cleanText(item)).filter(Boolean);
-    const code =
-      strings.find((item) => /^\d{6}$/.test(item)) ||
-      cleanText(value.code || value.itemCode || value.symbol || value.ticker);
-    const name =
-      cleanText(value.name || value.itemName || value.nm || value.korName || value.stockName) ||
-      strings.find((item) => looksLikeName(item, code));
-    if (/^\d{6}$/.test(code) && name) rows.push({ code, name, raw: strings.join(" ") });
-
-    Object.values(value).forEach((item) => collectNaverRows(item, rows));
-  }
-
-  return rows;
-};
-
 const naverItem = ({ code, name, raw }) => {
   const isEtf = /\bETF\b/i.test(raw) || /ETF/i.test(name);
   return {
@@ -104,34 +46,29 @@ const naverItem = ({ code, name, raw }) => {
 };
 
 const searchNaverAutocomplete = async (query) => {
-  const url = new URL("https://ac.finance.naver.com/ac");
-  url.searchParams.set("q", query);
-  url.searchParams.set("q_enc", "UTF-8");
-  url.searchParams.set("st", "111");
-  url.searchParams.set("r_lt", "111");
-
-  const text = await fetchText(url);
-  const data = parseJsonish(text);
-  return uniqueBy(collectNaverRows(data), (item) => item.code).slice(0, 10).map(naverItem);
-};
-
-const searchNaverFinanceHtml = async (query) => {
-  const url = new URL("https://finance.naver.com/search/searchList.naver");
+  const url = new URL("https://m.stock.naver.com/front-api/search/autoComplete");
   url.searchParams.set("query", query);
-  const html = await fetchText(url, "euc-kr");
-  const matches = [...html.matchAll(/item\/main\.naver\?code=(\d{6})["'][^>]*>([\s\S]*?)<\/a>/g)];
+  url.searchParams.set("target", "stock");
 
-  return uniqueBy(matches, (match) => match[1]).slice(0, 10).map((match) => {
-    const code = match[1];
-    const name = cleanText(match[2]);
-    return naverItem({ code, name, raw: name });
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/json",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+      "Referer": "https://m.stock.naver.com/search"
+    }
   });
-};
+  const data = await response.json();
+  if (!response.ok || !data?.isSuccess) throw new Error("Naver stock search failed");
 
-const searchNaverFinance = async (query) => {
-  const autocompleteItems = await searchNaverAutocomplete(query).catch(() => []);
-  if (autocompleteItems.length) return autocompleteItems;
-  return searchNaverFinanceHtml(query).catch(() => []);
+  return (Array.isArray(data?.result?.items) ? data.result.items : [])
+    .filter((item) => item?.nationCode === "KOR" && /^\d{6}$/.test(item?.code || ""))
+    .slice(0, 10)
+    .map((item) => naverItem({
+      code: item.code,
+      name: cleanText(item.name),
+      raw: `${item.name || ""} ${item.typeCode || ""} ${item.typeName || ""}`
+    }));
 };
 
 const searchYahooFinance = async (query) => {
@@ -151,18 +88,21 @@ const searchYahooFinance = async (query) => {
   if (!response.ok) throw new Error("Yahoo Finance search failed");
 
   const usExchanges = new Set(["NMS", "NYQ", "ASE", "PCX", "BTS", "NCM", "NGM"]);
+  const koreanExchanges = new Set(["KSC", "KOQ"]);
   return (Array.isArray(data.quotes) ? data.quotes : [])
-    .filter((item) => item.symbol && usExchanges.has(item.exchange))
+    .filter((item) => item.symbol && (usExchanges.has(item.exchange) || koreanExchanges.has(item.exchange) || /\.K[QS]$/i.test(item.symbol)))
     .slice(0, 10)
     .map((item) => {
       const isEtf = String(item.quoteType || "").toUpperCase() === "ETF";
+      const isKorean = koreanExchanges.has(item.exchange) || /\.K[QS]$/i.test(item.symbol);
+      const ticker = isKorean ? item.symbol.replace(/\.K[QS]$/i, "") : item.symbol;
       return {
         name: item.shortname || item.longname || item.symbol,
-        ticker: item.symbol,
-        providerSymbol: item.symbol,
-        market: isEtf ? "ETF_US" : "US",
-        currency: item.currency || "USD",
-        country: "US",
+        ticker,
+        providerSymbol: ticker,
+        market: isKorean ? (isEtf ? "ETF_KR" : "KR") : (isEtf ? "ETF_US" : "US"),
+        currency: isKorean ? "KRW" : item.currency || "USD",
+        country: isKorean ? "KR" : "US",
         assetClass: isEtf ? "etf" : "stock",
         source: "yahoo"
       };
@@ -184,7 +124,7 @@ export const handler = async (event) => {
     return { statusCode: 200, body: JSON.stringify({ items: [] }) };
   }
 
-  const results = await Promise.allSettled([searchNaverFinance(query), searchYahooFinance(query)]);
+  const results = await Promise.allSettled([searchNaverAutocomplete(query), searchYahooFinance(query)]);
   const items = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
   return {
     statusCode: 200,
