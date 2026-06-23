@@ -723,7 +723,7 @@ function App() {
             </button>
           </div>
         </div>
-        <nav className="mx-auto flex max-w-7xl gap-2 overflow-x-auto px-4 pb-3">
+        <nav className="mx-auto flex max-w-7xl flex-wrap gap-2 px-3 pb-3 sm:px-4">
           {tabs.map((tab) => (
             <button
               key={tab.key}
