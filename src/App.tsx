@@ -110,6 +110,17 @@ type TabKey =
   | "backup"
   | "more";
 
+interface InstrumentSuggestion {
+  name: string;
+  ticker: string;
+  providerSymbol: string;
+  market: Market;
+  currency: Currency;
+  country: string;
+  assetClass: AssetClass;
+  source: string;
+}
+
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "dashboard", label: "대시보드" },
   { key: "trades", label: "매매" },
@@ -305,6 +316,106 @@ const Field = ({ label, children }: { label: string; children: ReactNode }) => (
   </label>
 );
 
+const searchInstruments = async (query: string): Promise<InstrumentSuggestion[]> => {
+  const response = await fetch(`/api/instrument-search?q=${encodeURIComponent(query)}`);
+  if (response.status === 404) {
+    const fallback = await fetch(`/.netlify/functions/instrument-search?q=${encodeURIComponent(query)}`);
+    if (!fallback.ok) throw new Error(`종목 검색 실패: ${fallback.status}`);
+    return ((await fallback.json()).items ?? []) as InstrumentSuggestion[];
+  }
+  if (!response.ok) throw new Error(`종목 검색 실패: ${response.status}`);
+  return ((await response.json()).items ?? []) as InstrumentSuggestion[];
+};
+
+const InstrumentSearchInput = ({
+  value,
+  onValueChange,
+  onSelect,
+  placeholder
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  onSelect: (item: InstrumentSuggestion) => void;
+  placeholder: string;
+}) => {
+  const [items, setItems] = useState<InstrumentSuggestion[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const query = value.trim();
+    if (query.length < 2) {
+      setItems([]);
+      setError("");
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    setLoading(true);
+    const timeout = window.setTimeout(async () => {
+      try {
+        const result = await searchInstruments(query);
+        if (!active) return;
+        setItems(result);
+        setOpen(true);
+        setError(result.length ? "" : "검색 결과가 없습니다.");
+      } catch {
+        if (!active) return;
+        setItems([]);
+        setOpen(true);
+        setError("온라인 종목 검색에 실패했습니다.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeout);
+    };
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <input
+        className="field"
+        value={value}
+        onChange={(event) => {
+          onValueChange(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {open && (items.length > 0 || loading || error) && (
+        <div className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-950">
+          {loading && <div className="px-3 py-2 text-sm text-slate-500">검색 중...</div>}
+          {!loading && error && !items.length && <div className="px-3 py-2 text-sm text-slate-500">{error}</div>}
+          {items.map((item) => (
+            <button
+              key={`${item.market}-${item.ticker}`}
+              className="grid w-full gap-1 border-b border-slate-100 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-teal-50 dark:border-slate-800 dark:hover:bg-slate-900"
+              type="button"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onSelect(item);
+                setOpen(false);
+              }}
+            >
+              <span className="font-semibold text-slate-950 dark:text-white">{item.name}</span>
+              <span className="text-xs text-slate-500">{item.ticker} · {marketLabels[item.market]} · {item.source === "naver" ? "네이버 금융" : "Yahoo Finance"}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MultiSelectField = ({
   label,
   options,
@@ -377,15 +488,19 @@ const buildAssetFromTrade = ({
   name,
   market,
   currentPrice,
-  fxRate
+  fxRate,
+  ticker,
+  providerSymbol
 }: {
   name: string;
   market: Market;
   currentPrice: number;
   fxRate: number;
+  ticker?: string;
+  providerSymbol?: string;
 }): Asset => {
   const trimmedName = name.trim();
-  const symbol = trimmedName.toUpperCase();
+  const symbol = (providerSymbol || ticker || trimmedName).trim().toUpperCase();
   const currency = defaultCurrencyForMarket(market);
   return {
     id: createId("asset"),
@@ -1311,7 +1426,9 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
     currentPrice: 0,
     currentFxRate: 1,
     isLeveraged: false,
-    isGrowth: false
+    isGrowth: false,
+    ticker: "",
+    providerSymbol: ""
   };
   const [assetDraft, setAssetDraft] = useState(emptyAssetDraft);
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
@@ -1343,14 +1460,16 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
       currentPrice: asset.currentPrice,
       currentFxRate: asset.currentFxRate,
       isLeveraged: Boolean(asset.isLeveraged),
-      isGrowth: Boolean(asset.isGrowth)
+      isGrowth: Boolean(asset.isGrowth),
+      ticker: asset.ticker,
+      providerSymbol: asset.providerSymbol
     });
   };
 
   const saveAsset = (event: FormEvent) => {
     event.preventDefault();
     if (!assetDraft.name.trim()) return;
-    const symbol = assetDraft.name.trim().toUpperCase();
+    const symbol = (assetDraft.providerSymbol || assetDraft.ticker || assetDraft.name).trim().toUpperCase();
     const existingAsset = editingAssetId ? state.assets.find((asset) => asset.id === editingAssetId) : undefined;
     const asset: Asset = {
       ...assetDraft,
@@ -1432,7 +1551,23 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
           )}
           <div className="grid gap-3">
             <Field label="종목명">
-              <input className="field" value={assetDraft.name} onChange={(event) => setAssetDraft({ ...assetDraft, name: event.target.value })} placeholder="예: 삼성전자 또는 AAPL" />
+              <InstrumentSearchInput
+                value={assetDraft.name}
+                onValueChange={(value) => setAssetDraft({ ...assetDraft, name: value, ticker: "", providerSymbol: "" })}
+                onSelect={(item) => setAssetDraft({
+                  ...assetDraft,
+                  name: item.name,
+                  ticker: item.ticker,
+                  providerSymbol: item.providerSymbol,
+                  market: item.market,
+                  assetClass: item.assetClass,
+                  country: item.country,
+                  currency: item.currency,
+                  currentFxRate: item.currency === "KRW" ? 1 : assetDraft.currentFxRate,
+                  benchmark: defaultBenchmarkForMarket(item.market)
+                })}
+                placeholder="예: 삼성, 삼성전자, AAPL"
+              />
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1530,7 +1665,9 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     fxRate: 1,
     horizon: "3m" as Horizon,
     emotion: "planned" as Emotion,
-    memo: ""
+    memo: "",
+    ticker: "",
+    providerSymbol: ""
   });
   const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
   const [draft, setDraft] = useState(createTradeDraft);
@@ -1575,7 +1712,9 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       fxRate: trade.fxRate || 1,
       horizon: trade.horizon,
       emotion: trade.emotion,
-      memo: trade.memo
+      memo: trade.memo,
+      ticker: trade.tickerSnapshot,
+      providerSymbol: trade.tickerSnapshot
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -1591,14 +1730,17 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     if (!draft.accountId || !draft.assetName.trim() || draft.quantity <= 0 || draft.price <= 0) return;
     const matchedAsset =
       state.assets.find((item) => item.id === draft.assetId) ??
-      state.assets.find((item) => item.name.trim().toLowerCase() === draft.assetName.trim().toLowerCase());
+      state.assets.find((item) => item.name.trim().toLowerCase() === draft.assetName.trim().toLowerCase()) ??
+      state.assets.find((item) => Boolean(draft.providerSymbol) && (item.providerSymbol === draft.providerSymbol || item.ticker === draft.providerSymbol));
     const newAsset = matchedAsset
       ? null
       : buildAssetFromTrade({
           name: draft.assetName,
           market: draft.market,
           currentPrice: draft.price,
-          fxRate: draft.fxRate
+          fxRate: draft.fxRate,
+          ticker: draft.ticker,
+          providerSymbol: draft.providerSymbol
         });
     const asset = matchedAsset ?? newAsset!;
     const fxRate = draft.fxRate || (asset.currency === "KRW" ? 1 : asset.currentFxRate || 1);
@@ -1675,26 +1817,36 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
             </Field>
           </div>
           <Field label="종목">
-            <input
-              className="field"
-              list="trade-asset-list"
+            <InstrumentSearchInput
               value={draft.assetName}
-              onChange={(event) => {
-                const assetNameValue = event.target.value;
-                const asset = state.assets.find((item) => item.name.trim().toLowerCase() === assetNameValue.trim().toLowerCase());
+              onValueChange={(value) => {
+                const asset = state.assets.find((item) => item.name.trim().toLowerCase() === value.trim().toLowerCase());
                 setDraft({
                   ...draft,
-                  assetName: assetNameValue,
+                  assetName: value,
                   assetId: asset?.id ?? "",
                   market: asset?.market ?? draft.market,
-                  fxRate: asset?.currentFxRate ?? draft.fxRate
+                  fxRate: asset?.currentFxRate ?? draft.fxRate,
+                  ticker: asset?.ticker ?? "",
+                  providerSymbol: asset?.providerSymbol ?? ""
                 });
               }}
-              placeholder="예: 삼성전자 또는 AAPL"
+              onSelect={(item) => {
+                const asset = state.assets.find(
+                  (candidate) => candidate.ticker === item.ticker || candidate.providerSymbol === item.providerSymbol || candidate.name.trim().toLowerCase() === item.name.trim().toLowerCase()
+                );
+                setDraft({
+                  ...draft,
+                  assetName: item.name,
+                  assetId: asset?.id ?? "",
+                  market: asset?.market ?? item.market,
+                  fxRate: asset?.currentFxRate ?? (item.currency === "KRW" ? 1 : draft.fxRate),
+                  ticker: item.ticker,
+                  providerSymbol: item.providerSymbol
+                });
+              }}
+              placeholder="예: 삼성, 삼성전자, AAPL"
             />
-            <datalist id="trade-asset-list">
-              {state.assets.map((asset) => <option key={asset.id} value={asset.name} />)}
-            </datalist>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="구분">
