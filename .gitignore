@@ -1,0 +1,11 @@
+node_modules
+dist
+.npm-cache
+.env
+.env.local
+.DS_Store
+*.local
+vite.*.log
+static.*.log
+encrypted-investment-journal.json
+investment-journal-backup*.json
