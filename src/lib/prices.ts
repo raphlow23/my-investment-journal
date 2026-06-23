@@ -21,7 +21,7 @@ interface PriceApiResponse {
   errors?: Array<{ instrumentId: string; ticker: string; message: string }>;
 }
 
-const apiMarkets = new Set(["US", "ETF_US"]);
+const apiMarkets = new Set(["KR", "ETF_KR", "US", "ETF_US"]);
 
 export const canUseApiPrice = (asset: Asset) =>
   apiMarkets.has(asset.market) && Boolean(asset.providerSymbol || asset.ticker || asset.name);
@@ -34,8 +34,11 @@ const categorizePriceFailure = (message: string) => {
   if (normalized.includes("fx") || normalized.includes("exchange") || normalized.includes("환율")) {
     return "환율 실패";
   }
-  if (normalized.includes("ticker") || normalized.includes("symbol") || normalized.includes("티커") || normalized.includes("심볼")) {
-    return "티커 누락";
+  if (normalized.includes("ticker") || normalized.includes("symbol") || normalized.includes("종목코드") || normalized.includes("코드")) {
+    return "종목코드 확인 필요";
+  }
+  if (normalized.includes("naver") || normalized.includes("네이버")) {
+    return "국내 가격 조회 실패";
   }
   return "API 실패";
 };
@@ -49,13 +52,14 @@ const buildNoTargetMessage = (state: AppState) => {
   if (!activeAssetIds.size) return "보유 종목 없음: 가격 갱신할 보유 종목이 없습니다.";
 
   const heldAssets = state.assets.filter((asset) => activeAssetIds.has(asset.id));
-  const hasUsAsset = heldAssets.some((asset) => apiMarkets.has(asset.market));
+  const hasApiAsset = heldAssets.some((asset) => apiMarkets.has(asset.market));
   const hasMissingTicker = heldAssets.some(
     (asset) => apiMarkets.has(asset.market) && !asset.providerSymbol && !asset.ticker && !asset.name
   );
-  if (hasMissingTicker) return "티커 누락: 자동 가격 갱신에 필요한 종목 식별값이 없습니다.";
-  if (!hasUsAsset) return "보유 종목 없음: 국내 종목은 MVP에서 수동 현재가 입력 대상입니다.";
-  return "API 실패: 자동 가격 갱신 대상 종목을 만들 수 없습니다.";
+
+  if (hasMissingTicker) return "종목코드 누락: 자동 가격 갱신에 필요한 종목명 또는 6자리 코드가 없습니다.";
+  if (!hasApiAsset) return "가격 갱신 대상 없음: 지원하는 시장의 보유 종목이 없습니다.";
+  return "가격 갱신 대상 없음: 자동 가격 갱신 대상 종목을 찾지 못했습니다.";
 };
 
 export const buildPriceTargets = (state: AppState): PriceRequestItem[] => {
@@ -80,7 +84,7 @@ const postQuotes = (url: string, items: PriceRequestItem[]) =>
   fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "twelve_data", symbols: items })
+    body: JSON.stringify({ provider: "auto", symbols: items })
   });
 
 const requestQuotes = async (items: PriceRequestItem[]) => {
@@ -98,6 +102,7 @@ const requestQuotes = async (items: PriceRequestItem[]) => {
 export const refreshApiPrices = async (state: AppState): Promise<PriceRefreshResult> => {
   const targets = buildPriceTargets(state);
   const updatedAt = new Date().toISOString();
+
   if (!targets.length) {
     const message = buildNoTargetMessage(state);
     return {
@@ -142,6 +147,8 @@ export const refreshApiPrices = async (state: AppState): Promise<PriceRefreshRes
       }
       return {
         ...asset,
+        ticker: quote.ticker || asset.ticker,
+        providerSymbol: quote.ticker || asset.providerSymbol,
         currentPrice: quote.price,
         currentFxRate: quote.fxRate || asset.currentFxRate || 1,
         priceSource: quote.source,
@@ -149,6 +156,7 @@ export const refreshApiPrices = async (state: AppState): Promise<PriceRefreshRes
         priceUpdateError: undefined
       };
     }
+
     const error = errorMap.get(asset.id);
     return error ? { ...asset, priceUpdateError: error } : asset;
   });

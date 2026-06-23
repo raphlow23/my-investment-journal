@@ -1502,7 +1502,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
                 </div>
               </div>
               <p className="mt-1 text-xs text-slate-500">{marketLabels[asset.market]} · {asset.sector || "섹터 미입력"} · {asset.themes.join(", ") || "테마 미입력"}</p>
-              <p className="mt-1 text-xs text-slate-500">가격: {asset.market === "US" || asset.market === "ETF_US" ? "Twelve Data 자동 시도" : "수동 입력"} · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
+              <p className="mt-1 text-xs text-slate-500">가격: {asset.market === "KR" || asset.market === "ETF_KR" ? "네이버 금융 자동 시도" : "Twelve Data 자동 시도"} · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
             </div>
           ))}
           {!state.assets.length && <EmptyText text="등록된 종목이 없습니다." />}
