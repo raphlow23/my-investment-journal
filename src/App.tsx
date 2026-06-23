@@ -1299,7 +1299,7 @@ function Holdings({
 
 function Manage({ state, updateState }: { state: AppState; updateState: (producer: (current: AppState) => AppState, message?: string) => void }) {
   const [accountDraft, setAccountDraft] = useState({ name: "", type: "taxable" as AccountType, currency: "KRW" as Currency, memo: "" });
-  const [assetDraft, setAssetDraft] = useState({
+  const emptyAssetDraft = {
     name: "",
     market: "KR" as Market,
     assetClass: "stock" as AssetClass,
@@ -1312,7 +1312,9 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
     currentFxRate: 1,
     isLeveraged: false,
     isGrowth: false
-  });
+  };
+  const [assetDraft, setAssetDraft] = useState(emptyAssetDraft);
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
 
   const addAccount = (event: FormEvent) => {
     event.preventDefault();
@@ -1322,22 +1324,61 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
     setAccountDraft({ name: "", type: "taxable", currency: "KRW", memo: "" });
   };
 
-  const addAsset = (event: FormEvent) => {
+  const cancelEditAsset = () => {
+    setEditingAssetId(null);
+    setAssetDraft(emptyAssetDraft);
+  };
+
+  const startEditAsset = (asset: Asset) => {
+    setEditingAssetId(asset.id);
+    setAssetDraft({
+      name: asset.name,
+      market: asset.market,
+      assetClass: asset.assetClass,
+      sector: asset.sector,
+      themes: asset.themes.join(", "),
+      country: asset.country,
+      currency: asset.currency,
+      benchmark: asset.benchmark,
+      currentPrice: asset.currentPrice,
+      currentFxRate: asset.currentFxRate,
+      isLeveraged: Boolean(asset.isLeveraged),
+      isGrowth: Boolean(asset.isGrowth)
+    });
+  };
+
+  const saveAsset = (event: FormEvent) => {
     event.preventDefault();
     if (!assetDraft.name.trim()) return;
     const symbol = assetDraft.name.trim().toUpperCase();
+    const existingAsset = editingAssetId ? state.assets.find((asset) => asset.id === editingAssetId) : undefined;
     const asset: Asset = {
       ...assetDraft,
       ticker: symbol,
-      id: createId("asset"),
+      id: editingAssetId ?? createId("asset"),
       themes: assetDraft.themes.split(",").map((theme) => theme.trim()).filter(Boolean),
       priceProvider: assetDraft.market === "US" || assetDraft.market === "ETF_US" ? "twelve_data" : "manual",
       providerSymbol: symbol,
       priceSource: "manual",
       priceUpdateError: undefined,
       priceUpdatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString()
+      createdAt: existingAsset?.createdAt ?? new Date().toISOString()
     };
+    if (editingAssetId) {
+      updateState((current) => ({
+        ...current,
+        assets: current.assets.map((item) => item.id === editingAssetId ? asset : item),
+        trades: current.trades.map((trade) => trade.assetId === editingAssetId ? {
+          ...trade,
+          assetNameSnapshot: asset.name,
+          tickerSnapshot: asset.ticker,
+          marketSnapshot: asset.market
+        } : trade)
+      }), "종목 정보를 수정했습니다.");
+      setEditingAssetId(null);
+      setAssetDraft(emptyAssetDraft);
+      return;
+    }
     updateState((current) => ({ ...current, assets: [...current.assets, asset] }), "종목을 추가했습니다.");
     setAssetDraft({ ...assetDraft, name: "", sector: "", themes: "", currentPrice: 0 });
   };
@@ -1380,7 +1421,15 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
       </Section>
 
       <Section title="종목 관리">
-        <form className="grid gap-3" onSubmit={addAsset}>
+        <form className="grid gap-3" onSubmit={saveAsset}>
+          {editingAssetId && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2 text-sm text-teal-900 dark:border-teal-900 dark:bg-teal-950 dark:text-teal-100">
+              <span>종목 수정 중입니다. 내용을 바꾼 뒤 아래 저장 버튼을 눌러주세요.</span>
+              <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={cancelEditAsset}>
+                수정 취소
+              </button>
+            </div>
+          )}
           <div className="grid gap-3">
             <Field label="종목명">
               <input className="field" value={assetDraft.name} onChange={(event) => setAssetDraft({ ...assetDraft, name: event.target.value })} placeholder="예: 삼성전자 또는 AAPL" />
@@ -1435,7 +1484,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
             <label className="flex items-center gap-2"><input type="checkbox" checked={assetDraft.isGrowth} onChange={(event) => setAssetDraft({ ...assetDraft, isGrowth: event.target.checked })} />성장주</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={assetDraft.isLeveraged} onChange={(event) => setAssetDraft({ ...assetDraft, isLeveraged: event.target.checked })} />레버리지 ETF</label>
           </div>
-          <button className="primary-button" type="submit"><Plus className="h-4 w-4" />종목 추가</button>
+          <button className="primary-button" type="submit"><Plus className="h-4 w-4" />{editingAssetId ? "종목 수정 저장" : "종목 추가"}</button>
         </form>
       </Section>
 
@@ -1445,7 +1494,12 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
             <div key={asset.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm dark:bg-slate-950">
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">{asset.name}</span>
-                <span className="text-slate-500">{asset.currency}</span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-slate-500">{asset.currency}</span>
+                  <button className="secondary-button px-2 py-1 text-xs" type="button" onClick={() => startEditAsset(asset)}>
+                    수정
+                  </button>
+                </div>
               </div>
               <p className="mt-1 text-xs text-slate-500">{marketLabels[asset.market]} · {asset.sector || "섹터 미입력"} · {asset.themes.join(", ") || "테마 미입력"}</p>
               <p className="mt-1 text-xs text-slate-500">가격: {asset.market === "US" || asset.market === "ETF_US" ? "Twelve Data 자동 시도" : "수동 입력"} · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
