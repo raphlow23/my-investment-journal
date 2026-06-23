@@ -463,7 +463,7 @@ function App() {
     if (latestStateRef.current.settings.cloudSync.enabled) {
       void syncWithCloud("merge", firebaseUser);
     } else {
-      setSyncStatus("signed_out");
+      void chooseAndSyncAfterLogin(firebaseUser);
     }
   }, [ready, firebaseUser]);
 
@@ -575,38 +575,44 @@ function App() {
     }
   };
 
+  const chooseAndSyncAfterLogin = async (user: User) => {
+    const firebase = getFirebaseServices();
+    if (!firebase) return;
+    const local = latestStateRef.current;
+    const cloud = await downloadCloudState(firebase.db, user.uid, local);
+    const localHasData = hasUserData(local);
+    const cloudHasData = hasUserData(cloud);
+    let mode: "upload" | "download" | "merge" | "cancel" = "merge";
+    if (localHasData && cloudHasData && !local.settings.cloudSync.enabled) {
+      const answer = window.prompt(
+        "기존 로컬 데이터와 클라우드 데이터가 모두 있습니다.\n1: 로컬 데이터를 클라우드에 업로드\n2: 클라우드 데이터를 로컬로 가져오기\n3: 병합하기\n4: 취소",
+        "3"
+      );
+      mode = answer === "1" ? "upload" : answer === "2" ? "download" : answer === "4" ? "cancel" : "merge";
+    } else if (localHasData && !cloudHasData) {
+      mode = "upload";
+    } else if (!localHasData && cloudHasData) {
+      mode = "download";
+    }
+    if (mode === "cancel") {
+      setSyncStatus("conflict");
+      setSyncMessage("동기화 선택이 취소되었습니다.");
+      return;
+    }
+    await syncWithCloud(mode, user);
+  };
+
   const connectFirebase = async () => {
     if (!isFirebaseConfigured()) {
       setNotice("Firebase 설정이 없습니다. .env에 Firebase 웹 앱 설정을 먼저 입력하세요.");
       return;
     }
     try {
+      setNotice("");
+      setSyncMessage("");
       setSyncStatus("syncing");
-      const result = await signInWithGoogle();
-      const firebase = getFirebaseServices();
-      if (!firebase) return;
-      const local = latestStateRef.current;
-      const cloud = await downloadCloudState(firebase.db, result.user.uid, local);
-      const localHasData = hasUserData(local);
-      const cloudHasData = hasUserData(cloud);
-      let mode: "upload" | "download" | "merge" | "cancel" = "merge";
-      if (localHasData && cloudHasData && !local.settings.cloudSync.enabled) {
-        const answer = window.prompt(
-          "기존 로컬 데이터와 클라우드 데이터가 모두 있습니다.\n1: 로컬 데이터를 클라우드에 업로드\n2: 클라우드 데이터를 로컬로 가져오기\n3: 병합하기\n4: 취소",
-          "3"
-        );
-        mode = answer === "1" ? "upload" : answer === "2" ? "download" : answer === "4" ? "cancel" : "merge";
-      } else if (localHasData && !cloudHasData) {
-        mode = "upload";
-      } else if (!localHasData && cloudHasData) {
-        mode = "download";
-      }
-      if (mode === "cancel") {
-        setSyncStatus("conflict");
-        setSyncMessage("동기화 선택이 취소되었습니다.");
-        return;
-      }
-      await syncWithCloud(mode, result.user);
+      await signInWithGoogle();
+      setSyncMessage("Google 로그인 화면으로 이동합니다.");
     } catch (error) {
       setSyncStatus("error");
       setNotice(error instanceof Error ? error.message : "Google 로그인에 실패했습니다.");

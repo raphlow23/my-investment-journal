@@ -3,7 +3,7 @@ import {
   GoogleAuthProvider,
   getAuth,
   onAuthStateChanged,
-  signInWithPopup,
+  signInWithRedirect,
   signOut,
   type Auth,
   type User
@@ -62,7 +62,8 @@ export const signInWithGoogle = async () => {
   const firebase = getFirebaseServices();
   if (!firebase) throw new Error("Firebase 설정이 없습니다. .env에 Firebase 웹 앱 설정을 입력하세요.");
   const provider = new GoogleAuthProvider();
-  return signInWithPopup(firebase.auth, provider);
+  await signInWithRedirect(firebase.auth, provider);
+  return null;
 };
 
 export const signOutFirebase = async () => {
