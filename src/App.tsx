@@ -488,6 +488,7 @@ const defaultBenchmarkForMarket = (market: Market) =>
 const tradeAmountKrw = ({
   quantity,
   price,
+  priceKrw,
   priceCurrency,
   fxRate,
   fee,
@@ -496,12 +497,17 @@ const tradeAmountKrw = ({
 }: {
   quantity: number;
   price: number;
+  priceKrw?: number;
   priceCurrency?: Currency;
   fxRate: number;
   fee: number;
   foreignFee: number;
   tax: number;
-}) => quantity * price * (priceCurrency === "USD" ? fxRate || 1 : 1) + fee + foreignFee * (fxRate || 1) + tax;
+}) => quantity * (
+  priceCurrency === "USD" && priceKrw && priceKrw > 0
+    ? priceKrw
+    : price * (priceCurrency === "USD" ? fxRate || 1 : 1)
+) + fee + foreignFee * (fxRate || 1) + tax;
 
 const inferTradePriceCurrency = (trade: Trade, asset?: Asset): Currency => {
   if (trade.priceCurrency) return trade.priceCurrency;
@@ -1757,27 +1763,32 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
 
 function Trades({ state, updateState }: { state: AppState; updateState: (producer: (current: AppState) => AppState, message?: string) => void }) {
   const [showOptional, setShowOptional] = useState(false);
-  const createTradeDraft = () => ({
-    date: today(),
-    accountId: state.accounts[0]?.id ?? "",
-    assetId: state.assets[0]?.id ?? "",
-    assetName: state.assets[0]?.name ?? "",
-    market: state.assets[0]?.market ?? "KR" as Market,
-    side: "buy" as TradeSide,
-    kind: "new" as TradeKind,
-    quantity: 0,
-    price: 0,
-    priceCurrency: "KRW" as Currency,
-    foreignFee: 0,
-    fee: 0,
-    tax: 0,
-    fxRate: 1,
-    horizon: "3m" as Horizon,
-    emotion: "planned" as Emotion,
-    memo: "",
-    ticker: "",
-    providerSymbol: ""
-  });
+  const createTradeDraft = () => {
+    const firstAsset = state.assets[0];
+    const initialMarket = firstAsset?.market ?? "KR" as Market;
+    return {
+      date: today(),
+      accountId: state.accounts[0]?.id ?? "",
+      assetId: firstAsset?.id ?? "",
+      assetName: firstAsset?.name ?? "",
+      market: initialMarket,
+      side: "buy" as TradeSide,
+      kind: "new" as TradeKind,
+      quantity: 0,
+      price: 0,
+      priceKrw: 0,
+      priceCurrency: defaultCurrencyForMarket(initialMarket),
+      foreignFee: 0,
+      fee: 0,
+      tax: 0,
+      fxRate: 1,
+      horizon: "3m" as Horizon,
+      emotion: "planned" as Emotion,
+      memo: "",
+      ticker: "",
+      providerSymbol: ""
+    };
+  };
   const [editingTradeId, setEditingTradeId] = useState<string | null>(null);
   const [draft, setDraft] = useState(createTradeDraft);
 
@@ -1815,6 +1826,11 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       kind: trade.kind,
       quantity: trade.quantity,
       price: trade.price,
+      priceKrw: trade.priceKrw ?? (
+        (trade.priceCurrency ?? (trade.fxRate && trade.fxRate > 10 ? "USD" : "KRW")) === "USD"
+          ? trade.price * (trade.fxRate || 1)
+          : trade.price
+      ),
       priceCurrency: trade.priceCurrency ?? (trade.fxRate && trade.fxRate > 10 ? "USD" : "KRW"),
       foreignFee: 0,
       fee: trade.fee,
@@ -1862,6 +1878,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
   const addTrade = (event: FormEvent) => {
     event.preventDefault();
     if (!draft.accountId || !draft.assetName.trim() || draft.quantity <= 0 || draft.price <= 0) return;
+    if (draft.priceCurrency === "USD" && draft.priceKrw <= 0) return;
     const matchedAsset =
       state.assets.find((item) => item.id === draft.assetId) ??
       state.assets.find((item) => item.name.trim().toLowerCase() === draft.assetName.trim().toLowerCase()) ??
@@ -1877,7 +1894,9 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
           providerSymbol: draft.providerSymbol
         });
     const asset = matchedAsset ?? newAsset!;
-    const fxRate = draft.fxRate || (asset.currency === "KRW" ? 1 : asset.currentFxRate || 1);
+    const fxRate = draft.priceCurrency === "USD" && draft.price > 0 && draft.priceKrw > 0
+      ? draft.priceKrw / draft.price
+      : draft.fxRate || (asset.currency === "KRW" ? 1 : asset.currentFxRate || 1);
     const feeBase = draft.fee + (draft.foreignFee ? draft.foreignFee * fxRate : 0);
     const totalAmountKrw = tradeAmountKrw({ ...draft, fxRate });
     const trade: Trade = {
@@ -1888,6 +1907,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       kind: draft.kind,
       quantity: draft.quantity,
       price: draft.price,
+      priceKrw: draft.priceCurrency === "USD" ? draft.priceKrw : draft.price,
       priceCurrency: draft.priceCurrency,
       fee: feeBase,
       tax: draft.tax,
@@ -1920,7 +1940,17 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
         : newAsset ? "새 종목을 등록하고 체결 기록을 저장했습니다." : "체결 기록을 저장했습니다."
     );
     setEditingTradeId(null);
-    setDraft({ ...draft, quantity: 0, price: 0, priceCurrency: "KRW", foreignFee: 0, fee: 0, tax: 0, memo: "" });
+    setDraft({
+      ...draft,
+      quantity: 0,
+      price: 0,
+      priceKrw: 0,
+      priceCurrency: isUsMarket(draft.market) ? "USD" : "KRW",
+      foreignFee: 0,
+      fee: 0,
+      tax: 0,
+      memo: ""
+    });
   };
 
   return (
@@ -1961,6 +1991,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
                   assetName: value,
                   assetId: asset?.id ?? "",
                   market: asset?.market ?? draft.market,
+                  priceCurrency: asset && isUsMarket(asset.market) ? "USD" : asset ? "KRW" : draft.priceCurrency,
                   fxRate: asset?.currentFxRate ?? draft.fxRate,
                   ticker: asset?.ticker ?? "",
                   providerSymbol: asset?.providerSymbol ?? ""
@@ -1975,6 +2006,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
                   assetName: item.name,
                   assetId: asset?.id ?? "",
                   market: asset?.market ?? item.market,
+                  priceCurrency: isUsMarket(asset?.market ?? item.market) ? "USD" : "KRW",
                   fxRate: asset?.currentFxRate ?? (item.currency === "KRW" ? 1 : draft.fxRate),
                   ticker: item.ticker,
                   providerSymbol: item.providerSymbol
@@ -1998,9 +2030,55 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
           <div className="grid grid-cols-2 gap-3">
             <Field label="수량"><input className="field" type="number" value={draft.quantity} onChange={(event) => setDraft({ ...draft, quantity: inputNumber(event.target.value) })} /></Field>
             <Field label={draft.priceCurrency === "USD" ? "단가(달러)" : "단가(원화)"}>
-              <input className="field" type="number" value={draft.price} onChange={(event) => setDraft({ ...draft, price: inputNumber(event.target.value) })} />
+              <input
+                className="field"
+                type="number"
+                step={draft.priceCurrency === "USD" ? "0.0001" : "1"}
+                required
+                value={draft.price}
+                onChange={(event) => {
+                  const price = inputNumber(event.target.value);
+                  setDraft({
+                    ...draft,
+                    price,
+                    fxRate: draft.priceCurrency === "USD" && price > 0 && draft.priceKrw > 0
+                      ? draft.priceKrw / price
+                      : draft.fxRate
+                  });
+                }}
+              />
             </Field>
           </div>
+          {draft.priceCurrency === "USD" && (
+            <div className="grid grid-cols-2 gap-3 rounded-md border border-teal-200 bg-teal-50 p-3 dark:border-teal-900 dark:bg-teal-950/30">
+              <Field label="단가(원화)">
+                <input
+                  className="field"
+                  type="number"
+                  step="1"
+                  required
+                  value={draft.priceKrw}
+                  onChange={(event) => {
+                    const priceKrw = inputNumber(event.target.value);
+                    setDraft({
+                      ...draft,
+                      priceKrw,
+                      fxRate: draft.price > 0 && priceKrw > 0 ? priceKrw / draft.price : draft.fxRate
+                    });
+                  }}
+                  placeholder="주당 실제 원화 체결단가"
+                />
+              </Field>
+              <Field label="당시 환율(자동 계산)">
+                <input
+                  className="field bg-slate-100 dark:bg-slate-900"
+                  type="text"
+                  readOnly
+                  value={draft.price > 0 && draft.priceKrw > 0 ? formatNumber(draft.priceKrw / draft.price, 2) : "—"}
+                />
+              </Field>
+            </div>
+          )}
           <div className="rounded-md bg-slate-50 px-3 py-2 text-sm dark:bg-slate-950">
             총 거래금액: {formatKrw(tradeAmountKrw(draft))}
           </div>
@@ -2016,14 +2094,31 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
                     value={draft.market}
                     onChange={(event) => {
                       const market = event.target.value as Market;
-                      setDraft({ ...draft, market, priceCurrency: "KRW", fxRate: isUsMarket(market) ? draft.fxRate : 1 });
+                      setDraft({
+                        ...draft,
+                        market,
+                        priceCurrency: isUsMarket(market) ? "USD" : "KRW",
+                        priceKrw: isUsMarket(market) ? draft.priceKrw : draft.price,
+                        fxRate: isUsMarket(market) ? draft.fxRate : 1
+                      });
                     }}
                   >
                     {Object.entries(marketLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>
                 </Field>
                 <Field label="단가 통화">
-                  <select className="field" value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value as Currency })}>
+                  <select
+                    className="field"
+                    value={draft.priceCurrency}
+                    onChange={(event) => {
+                      const priceCurrency = event.target.value as Currency;
+                      setDraft({
+                        ...draft,
+                        priceCurrency,
+                        priceKrw: priceCurrency === "KRW" ? draft.price : draft.priceKrw
+                      });
+                    }}
+                  >
                     <option value="KRW">KRW 원화</option>
                     <option value="USD">USD 달러</option>
                   </select>
@@ -2031,7 +2126,9 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
                 <Field label="외화 수수료"><input className="field" type="number" value={draft.foreignFee} onChange={(event) => setDraft({ ...draft, foreignFee: inputNumber(event.target.value) })} placeholder="모르면 0" /></Field>
                 <Field label="원화 수수료"><input className="field" type="number" value={draft.fee} onChange={(event) => setDraft({ ...draft, fee: inputNumber(event.target.value) })} placeholder="모르면 0" /></Field>
                 <Field label="원화 세금"><input className="field" type="number" value={draft.tax} onChange={(event) => setDraft({ ...draft, tax: inputNumber(event.target.value) })} placeholder="모르면 0" /></Field>
-                <Field label="거래 환율"><input className="field" type="number" value={draft.fxRate} onChange={(event) => setDraft({ ...draft, fxRate: inputNumber(event.target.value) || 1 })} /></Field>
+                {draft.priceCurrency !== "USD" && (
+                  <Field label="거래 환율"><input className="field" type="number" value={draft.fxRate} onChange={(event) => setDraft({ ...draft, fxRate: inputNumber(event.target.value) || 1 })} /></Field>
+                )}
                 <Field label="메모"><textarea className="field min-h-20" value={draft.memo} onChange={(event) => setDraft({ ...draft, memo: event.target.value })} /></Field>
               </div>
             )}
@@ -2079,6 +2176,7 @@ function TradeTable({
             amount: tradeAmountKrw({
               quantity: trade.quantity,
               price: trade.price,
+              priceKrw: trade.priceKrw,
               priceCurrency,
               fxRate: trade.fxRate || 1,
               fee: trade.fee,
@@ -2098,7 +2196,18 @@ function TradeTable({
       { accessorFn: (row) => sideLabels[row.side], id: "side", header: "구분" },
       { accessorFn: (row) => tradeKindLabels[row.kind], id: "kind", header: "목적" },
       { accessorKey: "quantity", header: "수량" },
-      { accessorFn: (row) => row.priceCurrency === "USD" ? `$${formatNumber(row.price, 2)}` : formatKrw(row.price), id: "price", header: "단가" },
+      {
+        accessorFn: (row) => row.priceCurrency === "USD"
+          ? `$${formatNumber(row.price, 2)} / ${formatKrw(row.priceKrw ?? row.price * row.fxRate)}`
+          : formatKrw(row.price),
+        id: "price",
+        header: "체결단가"
+      },
+      {
+        accessorFn: (row) => row.priceCurrency === "USD" && row.fxRate > 0 ? formatNumber(row.fxRate, 2) : "—",
+        id: "fxRate",
+        header: "당시 환율"
+      },
       { accessorFn: (row) => formatKrw(row.amount), id: "amount", header: "총 거래금액" },
       { accessorKey: "memo", header: "메모" },
       {
@@ -2171,9 +2280,19 @@ function TradeTable({
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <p><span className="text-slate-500">수량</span><br /><strong>{formatNumber(row.quantity, 4)}</strong></p>
-                  <p><span className="text-slate-500">단가</span><br /><strong>{row.priceCurrency === "USD" ? `$${formatNumber(row.price, 2)}` : formatKrw(row.price)}</strong></p>
+                  <p>
+                    <span className="text-slate-500">체결단가</span><br />
+                    <strong>
+                      {row.priceCurrency === "USD"
+                        ? `$${formatNumber(row.price, 2)} / ${formatKrw(row.priceKrw ?? row.price * row.fxRate)}`
+                        : formatKrw(row.price)}
+                    </strong>
+                  </p>
                   <p><span className="text-slate-500">거래금액</span><br /><strong>{formatKrw(row.amount)}</strong></p>
-                  <p><span className="text-slate-500">시장</span><br /><strong>{row.market}</strong></p>
+                  <p>
+                    <span className="text-slate-500">{row.priceCurrency === "USD" ? "당시 환율" : "시장"}</span><br />
+                    <strong>{row.priceCurrency === "USD" ? formatNumber(row.fxRate, 2) : row.market}</strong>
+                  </p>
                 </div>
                 {row.memo && <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{row.memo}</p>}
               </div>

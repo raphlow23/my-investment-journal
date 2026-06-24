@@ -23,6 +23,9 @@ const tradePriceCurrency = (trade: Trade, asset?: { currency?: string; market?: 
 };
 
 const tradeValueKrw = (trade: Trade, asset?: { currency?: string; market?: Market }) => {
+  if (trade.priceKrw && trade.priceKrw > 0) {
+    return trade.quantity * trade.priceKrw;
+  }
   const currency = tradePriceCurrency(trade, asset);
   return trade.quantity * trade.price * (currency === "USD" ? trade.fxRate || 1 : 1);
 };

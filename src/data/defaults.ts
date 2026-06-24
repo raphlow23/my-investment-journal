@@ -65,7 +65,14 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
       return {
         ...trade,
         priceCurrency,
-        totalAmountKrw: trade.totalAmountKrw ?? trade.quantity * trade.price * (priceCurrency === "USD" ? trade.fxRate : 1) + trade.fee + trade.tax,
+        priceKrw: trade.priceKrw ?? (
+          priceCurrency === "USD" && trade.fxRate > 0
+            ? trade.price * trade.fxRate
+            : trade.price
+        ),
+        totalAmountKrw: trade.totalAmountKrw ?? trade.quantity * (
+          trade.priceKrw ?? trade.price * (priceCurrency === "USD" ? trade.fxRate : 1)
+        ) + trade.fee + trade.tax,
         assetNameSnapshot: trade.assetNameSnapshot ?? asset?.name ?? "",
         tickerSnapshot: trade.tickerSnapshot ?? asset?.ticker ?? "",
         marketSnapshot: trade.marketSnapshot ?? asset?.market ?? "KR",

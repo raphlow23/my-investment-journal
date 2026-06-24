@@ -60,6 +60,7 @@ export const exportCsv = (state: AppState) => {
     kind: trade.kind,
     quantity: trade.quantity,
     price: trade.price,
+    priceKrw: trade.priceKrw,
     fee: trade.fee,
     tax: trade.tax,
     fxRate: trade.fxRate,
