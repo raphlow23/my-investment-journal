@@ -94,14 +94,6 @@ export const hasUserData = (state: AppState) =>
   state.swapReviews.length > 0 ||
   state.monthlyReviews.length > 0;
 
-const dataScore = (state: AppState) =>
-  state.trades.length * 100 +
-  state.assets.length * 20 +
-  state.theses.length * 10 +
-  state.checklists.length * 5 +
-  state.swapReviews.length * 3 +
-  state.monthlyReviews.length * 3;
-
 export const downloadCloudState = async (db: Firestore, uid: string, localBase: AppState): Promise<AppState> => {
   const cloudDeletes = await downloadCloudDeletes(db, uid);
   const snapshot = await getDoc(snapshotRef(db, uid));
@@ -185,15 +177,12 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
   const remote = await downloadCloudState(db, uid, local);
   const localOwner = local.settings.cloudSync.userId;
   if (localOwner !== uid) {
-    const forceLocal = typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("syncSource") === "local";
-    const chosen = forceLocal || (!localOwner && dataScore(local) > dataScore(remote)) ? local : remote;
     const accountState = mergeWithDefaults({
-      ...chosen,
+      ...remote,
       settings: {
-        ...chosen.settings,
+        ...remote.settings,
         cloudSync: {
-          ...chosen.settings.cloudSync,
+          ...remote.settings.cloudSync,
           userId: uid,
           enabled: true,
           lastSyncedAt: new Date().toISOString()
@@ -201,11 +190,6 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
       }
     });
     await uploadStateToCloud(db, uid, accountState);
-    if (forceLocal) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("syncSource");
-      window.history.replaceState({}, "", url);
-    }
     return accountState;
   }
 

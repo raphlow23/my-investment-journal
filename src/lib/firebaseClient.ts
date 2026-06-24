@@ -9,7 +9,6 @@ import {
   type User
 } from "firebase/auth";
 import {
-  enableIndexedDbPersistence,
   initializeFirestore,
   type Firestore
 } from "firebase/firestore";
@@ -21,7 +20,6 @@ type FirebaseServices = {
 };
 
 let services: FirebaseServices | null = null;
-let persistenceStarted = false;
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -44,10 +42,6 @@ export const getFirebaseServices = () => {
     ignoreUndefinedProperties: true
   });
   services = { app, auth, db };
-  if (!persistenceStarted) {
-    persistenceStarted = true;
-    void enableIndexedDbPersistence(db).catch(() => undefined);
-  }
   return services;
 };
 

@@ -81,7 +81,7 @@ import {
   formatPercentOrDash,
   today
 } from "./lib/format";
-import { loadState, resetState, saveState } from "./lib/storage";
+import { clearLegacyLocalState } from "./lib/storage";
 import { downloadText, exportCsv, exportJson, exportMarkdown } from "./lib/exporters";
 import { buildManualQuote, refreshApiPrices } from "./lib/prices";
 import {
@@ -95,7 +95,6 @@ import {
 import {
   cloudRecordId,
   downloadCloudState,
-  hasUserData,
   mergeLocalAndCloud,
   uploadStateToCloud
 } from "./lib/cloudSync";
@@ -577,24 +576,30 @@ function App() {
   const autoSyncedUidRef = useRef("");
 
   useEffect(() => {
-    loadState()
-      .then((stored) => {
-        setState(stored);
-        document.documentElement.classList.toggle("dark", stored.settings.darkMode);
-      })
-      .finally(() => setReady(true));
+    void clearLegacyLocalState();
   }, []);
 
   useEffect(() => {
     latestStateRef.current = state;
   }, [state]);
 
-  useEffect(() => listenToFirebaseUser(setFirebaseUser), []);
+  useEffect(() => listenToFirebaseUser((user) => {
+    setFirebaseUser(user);
+    setReady(false);
+    autoSyncedUidRef.current = "";
+    if (!user) {
+      const empty = createEmptyState();
+      setState(empty);
+      latestStateRef.current = empty;
+      setSyncStatus(navigator.onLine ? "signed_out" : "offline");
+      setReady(true);
+    }
+  }), []);
 
   useEffect(() => {
     const online = () => {
       setSyncStatus(firebaseUser ? "syncing" : "signed_out");
-      if (firebaseUser) void syncWithCloud("merge");
+      if (firebaseUser) void syncWithCloud("download");
     };
     const offline = () => setSyncStatus("offline");
     window.addEventListener("online", online);
@@ -606,41 +611,50 @@ function App() {
   }, [firebaseUser]);
 
   useEffect(() => {
-    if (!ready || !firebaseUser || autoSyncedUidRef.current === firebaseUser.uid) return;
+    if (!firebaseUser || autoSyncedUidRef.current === firebaseUser.uid) return;
     autoSyncedUidRef.current = firebaseUser.uid;
-    if (latestStateRef.current.settings.cloudSync.enabled) {
-      void syncWithCloud("merge", firebaseUser);
-    } else {
-      void chooseAndSyncAfterLogin(firebaseUser);
-    }
-  }, [ready, firebaseUser]);
+    void syncWithCloud("download", firebaseUser);
+  }, [firebaseUser]);
 
   useEffect(() => {
     if (!ready || !firebaseUser) return;
     const timer = window.setInterval(() => {
-      if (navigator.onLine && !applyingCloudRef.current) void syncWithCloud("merge", firebaseUser);
+      if (navigator.onLine && ready && !applyingCloudRef.current) void syncWithCloud("download", firebaseUser);
     }, 60 * 1000);
     return () => window.clearInterval(timer);
   }, [ready, firebaseUser]);
 
   const persist = async (next: AppState, message?: string) => {
-    const saved = await saveState({
+    if (!firebaseUser) {
+      setNotice("Google 로그인 후 저장할 수 있습니다.");
+      return;
+    }
+    if (!navigator.onLine) {
+      setSyncStatus("offline");
+      setNotice("인터넷 연결이 없어 저장하지 못했습니다.");
+      return;
+    }
+    const saved = {
       ...next,
+      updatedAt: new Date().toISOString(),
       settings: {
         ...next.settings,
         cloudSync: {
           ...next.settings.cloudSync,
-          enabled: Boolean(firebaseUser) || next.settings.cloudSync.enabled
+          userId: firebaseUser?.uid,
+          enabled: Boolean(firebaseUser)
         }
       }
-    });
-    setState(saved);
-    latestStateRef.current = saved;
-    document.documentElement.classList.toggle("dark", saved.settings.darkMode);
-    if (message) setNotice(message);
-    if (firebaseUser && !applyingCloudRef.current) {
-      void uploadCurrentState(firebaseUser, saved);
+    };
+    let savedOnline = true;
+    if (applyingCloudRef.current) {
+      setState(saved);
+      latestStateRef.current = saved;
+      document.documentElement.classList.toggle("dark", saved.settings.darkMode);
+    } else {
+      savedOnline = await uploadCurrentState(firebaseUser, saved);
     }
+    if (message && savedOnline) setNotice(message);
   };
 
   const updateState = (producer: (current: AppState) => AppState, message?: string) => {
@@ -650,13 +664,13 @@ function App() {
   const uploadCurrentState = async (user: User, snapshot = latestStateRef.current) => {
     if (!navigator.onLine) {
       setSyncStatus("offline");
-      return;
+      return false;
     }
     const firebase = getFirebaseServices();
     if (!firebase) {
       setSyncStatus("local");
       setSyncMessage("Firebase 설정이 없어 로컬 모드로 동작합니다.");
-      return;
+      return false;
     }
     try {
       setSyncStatus("syncing");
@@ -666,19 +680,23 @@ function App() {
         settings: {
           ...snapshot.settings,
           cloudSync: {
+            ...snapshot.settings.cloudSync,
+            userId: user.uid,
             enabled: true,
             lastSyncedAt: new Date().toISOString()
           }
         }
       };
-      const saved = await saveState(synced);
-      setState(saved);
-      latestStateRef.current = saved;
+      setState(synced);
+      latestStateRef.current = synced;
+      document.documentElement.classList.toggle("dark", synced.settings.darkMode);
       setSyncStatus("synced");
       setSyncMessage("동기화 완료");
+      return true;
     } catch (error) {
       setSyncStatus("error");
       setSyncMessage(error instanceof Error ? error.message : "동기화 실패");
+      return false;
     }
   };
 
@@ -709,34 +727,20 @@ function App() {
         });
       } else {
         const next = mode === "download"
-          ? await downloadCloudState(firebase.db, user.uid, current)
+          ? await downloadCloudState(firebase.db, user.uid, createEmptyState())
           : await mergeLocalAndCloud(firebase.db, user.uid, current);
         await persist(next);
       }
       setSyncStatus("synced");
       setSyncMessage("동기화 완료");
+      setReady(true);
     } catch (error) {
       setSyncStatus("error");
       setSyncMessage(error instanceof Error ? error.message : "동기화 실패");
+      setReady(true);
     } finally {
       applyingCloudRef.current = false;
     }
-  };
-
-  const chooseAndSyncAfterLogin = async (user: User) => {
-    const firebase = getFirebaseServices();
-    if (!firebase) return;
-    const local = latestStateRef.current;
-    const cloud = await downloadCloudState(firebase.db, user.uid, local);
-    const localHasData = hasUserData(local);
-    const cloudHasData = hasUserData(cloud);
-    let mode: "upload" | "download" | "merge" = "merge";
-    if (localHasData && !cloudHasData) {
-      mode = "upload";
-    } else if (!localHasData && cloudHasData) {
-      mode = "download";
-    }
-    await syncWithCloud(mode, user);
   };
 
   const connectFirebase = async () => {
@@ -749,8 +753,7 @@ function App() {
       setSyncMessage("");
       setSyncStatus("syncing");
       const user = await signInWithGoogle();
-      if (user) await chooseAndSyncAfterLogin(user);
-      else setSyncMessage("팝업을 허용한 뒤 Google 로그인을 다시 눌러 주세요.");
+      if (!user) setSyncMessage("팝업을 허용한 뒤 Google 로그인을 다시 눌러 주세요.");
     } catch (error) {
       setSyncStatus("error");
       setNotice(getFirebaseAuthErrorMessage(error));
@@ -760,8 +763,11 @@ function App() {
   const disconnectFirebase = async () => {
     await signOutFirebase();
     setFirebaseUser(null);
+    const empty = createEmptyState();
+    setState(empty);
+    latestStateRef.current = empty;
     setSyncStatus("signed_out");
-    setSyncMessage("로그아웃했습니다. 로컬 모드는 계속 사용할 수 있습니다.");
+    setSyncMessage("로그아웃했습니다.");
   };
 
   const refreshPrices = async (manual = false) => {
@@ -790,11 +796,11 @@ function App() {
   };
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !firebaseUser) return;
     void refreshPrices(false);
     const timer = window.setInterval(() => void refreshPrices(false), 60 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [ready]);
+  }, [ready, firebaseUser]);
 
   const positions = useMemo(() => calculatePositions(state), [state]);
   const metrics = useMemo(() => calculateMetrics(state, positions), [state, positions]);
@@ -829,19 +835,38 @@ function App() {
     );
   }
 
+  if (!firebaseUser) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-paper px-4 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+        <div className="grid w-full max-w-sm gap-5 text-center">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-normal text-teal-700 dark:text-teal-400">온라인 투자 매매일지</p>
+            <h1 className="mt-1 text-2xl font-black text-slate-950 dark:text-white">My Investment Journal</h1>
+          </div>
+          <p className="text-sm text-slate-600 dark:text-slate-300">Google 계정에 저장된 투자 정보를 불러오려면 로그인하세요.</p>
+          <button className="primary-button w-full" type="button" onClick={() => void connectFirebase()}>
+            <Cloud className="h-4 w-4" />
+            Google 로그인
+          </button>
+          {(notice || syncMessage) && <p className="text-sm text-red-600 dark:text-red-300">{notice || syncMessage}</p>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-paper text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-2 px-3 py-3 sm:gap-3 sm:px-4">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-normal text-teal-700 dark:text-teal-400">
-              로컬 우선 매매일지
+              온라인 매매일지
             </p>
             <h1 className="truncate text-lg font-black text-slate-950 dark:text-white sm:text-xl">My Investment Journal</h1>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <div className="hidden max-w-[360px] truncate text-right text-xs text-slate-500 dark:text-slate-400 sm:block">
-              <span className="font-semibold text-slate-700 dark:text-slate-200">{firebaseUser?.email ?? "로컬 사용자"}</span>
+              <span className="font-semibold text-slate-700 dark:text-slate-200">{firebaseUser.email}</span>
               <span> · {syncStatusLabels[syncStatus]}</span>
             </div>
             {firebaseUser ? (
@@ -2711,8 +2736,8 @@ function BackupView({
   const importJson = async (file: File) => {
     const text = await file.text();
     const imported = mergeWithDefaults(JSON.parse(text));
-    const shouldReplace = window.confirm("현재 로컬 데이터를 가져온 JSON으로 덮어쓸까요?");
-    if (shouldReplace) await persist(imported, "JSON 데이터를 가져왔습니다.");
+    const shouldReplace = window.confirm("현재 온라인 데이터를 가져온 JSON으로 덮어쓸까요?");
+    if (shouldReplace) await persist(imported, "JSON 데이터를 온라인에 저장했습니다.");
   };
 
   return (
@@ -2751,9 +2776,9 @@ function BackupView({
           }} />
           <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()}><Upload className="h-4 w-4" />JSON 가져오기</button>
           <button className="danger-button" type="button" onClick={async () => {
-            const ok = window.confirm("이 기기의 로컬 데이터를 초기화할까요? Google 계정 자동 저장 데이터는 로그인 후 다시 불러올 수 있습니다.");
-            if (ok) await persist(await resetState(), "로컬 데이터를 초기화했습니다.");
-          }}>로컬 데이터 초기화</button>
+            const ok = window.confirm("이 Google 계정의 온라인 투자 데이터를 모두 초기화할까요? 이 작업은 되돌릴 수 없습니다.");
+            if (ok) await persist(createEmptyState(), "온라인 데이터를 초기화했습니다.");
+          }}>온라인 데이터 전체 초기화</button>
           <p className="text-sm text-slate-500 dark:text-slate-400">앱은 매수·매도 결정을 자동으로 내리지 않습니다. 기록, 계산, 복기, 위험 점검만 돕습니다.</p>
         </div>
       </Section>

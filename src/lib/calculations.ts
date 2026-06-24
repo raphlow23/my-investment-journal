@@ -68,7 +68,8 @@ export const calculatePositions = (state: AppState): Position[] => {
         const sellQuantity = Math.min(trade.quantity, lot.quantity);
         const averageCost = lot.quantity > 0 ? lot.costKrw / lot.quantity : 0;
         const costBasis = averageCost * sellQuantity;
-        const proceeds = gross - trade.fee - trade.tax;
+        const sellRatio = trade.quantity > 0 ? sellQuantity / trade.quantity : 0;
+        const proceeds = gross * sellRatio - (trade.fee + trade.tax) * sellRatio;
         lot.quantity -= sellQuantity;
         lot.costKrw -= costBasis;
         lot.realizedPnlKrw += proceeds - costBasis;
