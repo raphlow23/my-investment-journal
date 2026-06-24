@@ -1,4 +1,5 @@
 import { Account, AppState } from "../types";
+import { inferAssetClassification } from "../lib/assetClassification";
 
 const now = () => new Date().toISOString();
 
@@ -51,13 +52,18 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
     accounts: value.accounts?.length
       ? value.accounts.map((account) => ({ ...account, memo: account.memo ?? "" }))
       : empty.accounts,
-    assets: (value.assets ?? []).map((asset) => ({
-      ...asset,
-      priceProvider: "naver",
-      providerSymbol: asset.providerSymbol ?? asset.ticker ?? asset.name,
-      priceSource: asset.priceSource ?? "manual",
-      priceUpdateError: asset.priceUpdateError ?? undefined
-    })),
+    assets: (value.assets ?? []).map((asset) => {
+      const classification = inferAssetClassification(asset.name, asset.ticker, asset.assetClass);
+      return {
+        ...asset,
+        sector: asset.sector || classification.sector,
+        themes: asset.themes?.length ? asset.themes : classification.themes,
+        priceProvider: "naver",
+        providerSymbol: asset.providerSymbol ?? asset.ticker ?? asset.name,
+        priceSource: asset.priceSource ?? "manual",
+        priceUpdateError: asset.priceUpdateError ?? undefined
+      };
+    }),
     priceQuotes: value.priceQuotes ?? [],
     trades: (value.trades ?? []).map((trade) => {
       const asset = value.assets?.find((item) => item.id === trade.assetId);

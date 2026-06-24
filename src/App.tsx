@@ -70,6 +70,7 @@ import {
   groupPositions
 } from "./lib/calculations";
 import { createId } from "./lib/id";
+import { inferAssetClassification } from "./lib/assetClassification";
 import {
   currentMonth,
   formatKrw,
@@ -508,26 +509,6 @@ const defaultAssetClassForMarket = (market: Market): AssetClass =>
 const defaultBenchmarkForMarket = (market: Market) =>
   market === "US" ? "S&P500" : market === "ETF_US" ? "NASDAQ100" : "KOSPI200";
 
-const inferAssetClassification = (name: string, ticker: string, assetClass: AssetClass) => {
-  const text = `${name} ${ticker}`.toUpperCase();
-  const rules: Array<{ words: string[]; sector: string; themes: string[] }> = [
-    { words: ["삼성전자", "SK하이닉스", "반도체", "SEMICONDUCTOR", "NVDA", "AMD", "AVGO"], sector: "반도체", themes: ["AI", "반도체"] },
-    { words: ["APPLE", "AAPL", "MICROSOFT", "MSFT", "SOFTWARE", "소프트웨어"], sector: "정보기술", themes: ["기술주"] },
-    { words: ["LILLY", "LLY", "PHARMA", "BIO", "제약", "바이오"], sector: "헬스케어", themes: ["제약·바이오"] },
-    { words: ["BANK", "FINANCIAL", "은행", "금융"], sector: "금융", themes: ["금융"] },
-    { words: ["자동차", "MOTOR", "TESLA", "TSLA"], sector: "자동차", themes: ["모빌리티"] },
-    { words: ["BATTERY", "2차전지", "이차전지"], sector: "소재", themes: ["2차전지"] },
-    { words: ["S&P500", "나스닥", "NASDAQ", "다우존스", "DOW JONES"], sector: "시장지수", themes: ["미국지수"] },
-    { words: ["배당", "DIVIDEND"], sector: "배당전략", themes: ["배당"] },
-    { words: ["채권", "BOND", "TREASURY"], sector: "채권", themes: ["채권"] }
-  ];
-  const matched = rules.find((rule) => rule.words.some((word) => text.includes(word)));
-  if (matched) return matched;
-  return assetClass === "etf"
-    ? { sector: "ETF", themes: ["ETF"] }
-    : { sector: "", themes: [] as string[] };
-};
-
 const tradeAmountKrw = ({
   quantity,
   price,
@@ -846,12 +827,28 @@ function App() {
 
   useEffect(() => {
     if (!ready || !firebaseUser) return;
-    void refreshPrices(false);
     const timer = window.setInterval(() => void refreshPrices(false), 60 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [ready, firebaseUser]);
 
   const positions = useMemo(() => calculatePositions(state), [state]);
+  const priceTargetSignature = useMemo(
+    () =>
+      positions
+        .filter((position) => position.quantity > 0)
+        .map((position) => {
+          const asset = state.assets.find((item) => item.id === position.assetId);
+          return `${position.assetId}:${asset?.providerSymbol || asset?.ticker || ""}`;
+        })
+        .sort()
+        .join("|"),
+    [positions, state.assets]
+  );
+  useEffect(() => {
+    if (!ready || !firebaseUser || !priceTargetSignature) return;
+    const timer = window.setTimeout(() => void refreshPrices(false), 800);
+    return () => window.clearTimeout(timer);
+  }, [ready, firebaseUser, priceTargetSignature]);
   const metrics = useMemo(() => calculateMetrics(state, positions), [state, positions]);
   const warnings = useMemo(() => buildWarnings(state, positions), [state, positions]);
 
@@ -1481,18 +1478,22 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
       window.alert("검색 결과에서 종목을 선택한 뒤 등록해 주세요.");
       return;
     }
-    const symbol = (assetDraft.providerSymbol || assetDraft.ticker || assetDraft.name).trim().toUpperCase();
+    const ticker = (assetDraft.ticker || assetDraft.providerSymbol || assetDraft.name).trim().toUpperCase();
+    const providerSymbol = (assetDraft.providerSymbol || ticker).trim().toUpperCase();
+    const classification = inferAssetClassification(assetDraft.name, ticker, assetDraft.assetClass);
+    const themes = assetDraft.themes.split(",").map((theme) => theme.trim()).filter(Boolean);
     const existingAsset = editingAssetId ? state.assets.find((asset) => asset.id === editingAssetId) : undefined;
     const asset: Asset = {
       ...assetDraft,
-      ticker: symbol,
+      ticker,
       id: editingAssetId ?? createId("asset"),
-      themes: assetDraft.themes.split(",").map((theme) => theme.trim()).filter(Boolean),
+      sector: assetDraft.sector.trim() || classification.sector,
+      themes: themes.length ? themes : classification.themes,
       priceProvider: "naver",
-      providerSymbol: symbol,
-      priceSource: "manual",
-      priceUpdateError: undefined,
-      priceUpdatedAt: new Date().toISOString(),
+      providerSymbol,
+      priceSource: existingAsset?.priceSource ?? "manual",
+      priceUpdateError: existingAsset?.priceUpdateError,
+      priceUpdatedAt: existingAsset?.priceUpdatedAt,
       createdAt: existingAsset?.createdAt ?? new Date().toISOString()
     };
     if (editingAssetId) {
@@ -1511,7 +1512,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
       return;
     }
     updateState((current) => ({ ...current, assets: [...current.assets, asset] }), "종목을 추가했습니다.");
-    setAssetDraft({ ...assetDraft, name: "", sector: "", themes: "", currentPrice: 0 });
+    setAssetDraft(emptyAssetDraft);
   };
 
   const deleteAsset = (asset: Asset) => {
@@ -1706,7 +1707,9 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
                 </div>
               </div>
               <p className="mt-1 text-xs text-slate-500">{marketLabels[asset.market]} · {asset.sector || "섹터 미입력"} · {asset.themes.join(", ") || "테마 미입력"}</p>
-              <p className="mt-1 text-xs text-slate-500">가격: 네이버증권 · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                가격: 네이버증권 · {asset.priceSource === "api" ? "자동" : asset.priceUpdateError ? "자동 조회 실패" : "자동 조회 대기"}
+              </p>
             </div>
           ))}
           {!state.assets.length && <EmptyText text="등록된 종목이 없습니다." />}
