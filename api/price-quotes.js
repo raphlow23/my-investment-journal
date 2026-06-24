@@ -34,25 +34,6 @@ const readBody = async (req) => {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 };
 
-const fetchText = async (url, encoding = "utf-8") => {
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
-    }
-  });
-  const buffer = await response.arrayBuffer();
-  if (!response.ok) throw new Error(`조회 실패: ${response.status}`);
-  return new TextDecoder(encoding).decode(buffer);
-};
-
-const cleanText = (value) =>
-  String(value || "")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ")
-    .trim();
-
 const numberFrom = (...values) => {
   for (const value of values) {
     const number = Number(String(value ?? "").replace(/[^\d.-]/g, ""));
@@ -171,27 +152,48 @@ const resolveNaverCode = async (query) => {
   const directCode = raw.match(/\b\d{6}\b/);
   if (directCode) return directCode[0];
 
-  const searchUrl = new URL("https://finance.naver.com/search/searchList.naver");
+  const searchUrl = new URL("https://m.stock.naver.com/front-api/search/autoComplete");
   searchUrl.searchParams.set("query", raw);
-  const html = await fetchText(searchUrl, "euc-kr");
-  const links = [...html.matchAll(/item\/main\.naver\?code=(\d{6})["'][^>]*>([\s\S]*?)<\/a>/g)];
+  searchUrl.searchParams.set("target", "stock");
+  const response = await fetch(searchUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/json",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+      "Referer": "https://m.stock.naver.com/search"
+    }
+  });
+  const data = await response.json();
+  const items = Array.isArray(data?.result?.items) ? data.result.items : [];
   const normalized = raw.toLowerCase().replace(/\s+/g, "");
-  const exact = links.find((match) => cleanText(match[2]).toLowerCase().replace(/\s+/g, "") === normalized);
-  const selected = exact || links[0];
+  const exact = items.find((item) =>
+    item?.nationCode === "KOR" &&
+    String(item?.name || "").toLowerCase().replace(/\s+/g, "") === normalized &&
+    /^\d{6}$/.test(item?.code || "")
+  );
+  const selected = exact || items.find((item) => item?.nationCode === "KOR" && /^\d{6}$/.test(item?.code || ""));
 
-  if (!selected) throw new Error("네이버 금융에서 종목 코드를 찾지 못했습니다. 6자리 종목코드로 등록해 주세요.");
-  return selected[1];
+  if (!response.ok || !data?.isSuccess || !selected) {
+    throw new Error("네이버 금융에서 종목 코드를 찾지 못했습니다. 종목을 검색해 다시 선택해 주세요.");
+  }
+  return selected.code;
 };
 
 const quoteNaverFinance = async (query) => {
   const code = await resolveNaverCode(query);
-  const url = new URL("https://finance.naver.com/item/main.naver");
-  url.searchParams.set("code", code);
-
-  const html = await fetchText(url, "euc-kr");
-  const noToday = html.match(/<p class="no_today">([\s\S]*?)<\/p>/);
-  const price = numberFrom(noToday ? cleanText(noToday[1]) : "");
-  if (!price) throw new Error("네이버 금융에서 유효한 현재가를 받지 못했습니다.");
+  const response = await fetch(`https://m.stock.naver.com/api/stock/${code}/basic`, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/json",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+      "Referer": `https://m.stock.naver.com/domestic/stock/${code}/total`
+    }
+  });
+  const data = await response.json();
+  const price = numberFrom(data?.closePrice, data?.regularMarketPrice, data?.price);
+  if (!response.ok || !price || price > 100_000_000) {
+    throw new Error("네이버 금융에서 유효한 현재가를 받지 못했습니다.");
+  }
   return { code, price, provider: "naver" };
 };
 
