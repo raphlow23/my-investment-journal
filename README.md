@@ -70,15 +70,9 @@ VITE_GOOGLE_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
 
 ## 현재가 자동 업데이트
 
-MVP에서는 국내 주식, 국내 ETF, 환율은 수동 입력을 기본으로 유지합니다. 미국 주식과 미국 ETF는 Twelve Data를 통해 앱 시작 시, 앱 실행 중 1시간마다, 그리고 대시보드의 `가격 새로고침` 버튼으로 자동 업데이트를 시도합니다.
+국내·미국 주식과 ETF의 종목 검색, 종목코드 확인, 현재가, USD/KRW 환율은 네이버증권을 통해 조회합니다. 검색 결과에서 선택한 네이버 종목코드를 저장하고, 이후 가격 갱신은 종목명이 아닌 저장된 코드로 실행합니다.
 
-API Key는 브라우저 코드에 넣지 않습니다. Vercel은 `api/price-quotes.js`, Netlify는 `netlify/functions/price-quotes.js` 서버리스 프록시를 사용합니다. 배포 환경 변수에 Twelve Data 키만 설정하세요.
-
-```bash
-TWELVE_DATA_API_KEY=your-twelve-data-api-key
-```
-
-프록시는 사용자 매매 데이터나 포트폴리오를 저장하지 않고, 요청받은 미국 종목 심볼에 대한 가격만 반환합니다. 실패한 종목은 마지막 수동/자동 가격을 유지하고 앱에 실패 메시지와 마지막 업데이트 시간이 표시됩니다.
+Vercel은 `api/price-quotes.js`, Netlify는 `netlify/functions/price-quotes.js` 서버리스 프록시를 사용합니다. 별도의 증권사 API 키는 필요하지 않습니다. 프록시는 사용자 매매 데이터나 포트폴리오를 저장하지 않으며, 실패한 종목은 마지막 가격을 유지하고 오류와 마지막 업데이트 시간을 표시합니다.
 
 ## 데이터 보관 원칙
 

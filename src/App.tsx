@@ -430,7 +430,7 @@ const InstrumentSearchInput = ({
             >
               <span className="font-semibold text-slate-950 dark:text-white">{item.name}</span>
               <span className="text-xs text-slate-500">
-                {item.ticker} · {marketLabels[item.market]} · {item.source === "registered" ? "등록 종목" : item.source === "naver" ? "네이버 금융" : "Yahoo Finance"}
+                {item.ticker} · {marketLabels[item.market]} · {item.source === "registered" ? "등록 종목" : "네이버증권"}
               </span>
             </button>
           ))}
@@ -599,7 +599,7 @@ const buildAssetFromTrade = ({
     benchmark: defaultBenchmarkForMarket(market),
     currentPrice,
     currentFxRate: currency === "KRW" ? 1 : fxRate || 1,
-    priceProvider: isUsMarket(market) ? "twelve_data" : "manual",
+    priceProvider: "naver",
     providerSymbol: symbol,
     priceSource: "manual",
     priceUpdatedAt: new Date().toISOString(),
@@ -1489,7 +1489,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
       ticker: symbol,
       id: editingAssetId ?? createId("asset"),
       themes: assetDraft.themes.split(",").map((theme) => theme.trim()).filter(Boolean),
-      priceProvider: assetDraft.market === "US" || assetDraft.market === "ETF_US" ? "twelve_data" : "manual",
+      priceProvider: "naver",
       providerSymbol: symbol,
       priceSource: "manual",
       priceUpdateError: undefined,
@@ -1704,7 +1704,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
                 </div>
               </div>
               <p className="mt-1 text-xs text-slate-500">{marketLabels[asset.market]} · {asset.sector || "섹터 미입력"} · {asset.themes.join(", ") || "테마 미입력"}</p>
-              <p className="mt-1 text-xs text-slate-500">가격: 한국투자증권 Open API 우선 · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
+              <p className="mt-1 text-xs text-slate-500">가격: 네이버증권 · 현재 {asset.priceSource === "api" ? "자동" : "수동"}</p>
             </div>
           ))}
           {!state.assets.length && <EmptyText text="등록된 종목이 없습니다." />}
@@ -2848,7 +2848,7 @@ function BackupView({
 
       <Section title="가격 업데이트 설정" icon={<RefreshCw className="h-5 w-5 text-teal-700" />}>
         <div className="rounded-md bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-          가격 공급자는 한국투자증권 Open API를 우선 사용합니다. 키가 없거나 조회에 실패하면 국내는 네이버 금융, 미국은 Twelve Data로 대체 조회를 시도합니다.
+          종목 검색과 국내·미국 현재가는 네이버증권의 종목코드를 기준으로 조회합니다.
         </div>
       </Section>
 

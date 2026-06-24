@@ -24,7 +24,7 @@ export const createEmptyState = (): AppState => ({
   settings: {
     darkMode: false,
     backupPasswordHint: "",
-    defaultPriceProvider: "twelve_data",
+    defaultPriceProvider: "naver",
     cloudSync: {
       enabled: false
     },
@@ -53,7 +53,7 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
       : empty.accounts,
     assets: (value.assets ?? []).map((asset) => ({
       ...asset,
-      priceProvider: asset.market === "US" || asset.market === "ETF_US" ? "twelve_data" : "manual",
+      priceProvider: "naver",
       providerSymbol: asset.providerSymbol ?? asset.ticker ?? asset.name,
       priceSource: asset.priceSource ?? "manual",
       priceUpdateError: asset.priceUpdateError ?? undefined
@@ -120,7 +120,7 @@ export const mergeWithDefaults = (value: Partial<AppState> | null): AppState => 
     settings: {
       ...empty.settings,
       ...value.settings,
-      defaultPriceProvider: "twelve_data",
+      defaultPriceProvider: "naver",
       cloudSync: {
         ...empty.settings.cloudSync,
         ...value.settings?.cloudSync

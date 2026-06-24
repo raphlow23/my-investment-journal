@@ -37,11 +37,8 @@ const categorizePriceFailure = (message: string) => {
   if (normalized.includes("ticker") || normalized.includes("symbol") || normalized.includes("종목코드") || normalized.includes("코드")) {
     return "종목코드 확인 필요";
   }
-  if (normalized.includes("kis") || normalized.includes("한국투자")) {
-    return "한국투자증권 조회 실패";
-  }
   if (normalized.includes("naver") || normalized.includes("네이버")) {
-    return "국내 가격 조회 실패";
+    return "네이버증권 조회 실패";
   }
   return "API 실패";
 };
@@ -87,7 +84,7 @@ const postQuotes = (url: string, items: PriceRequestItem[]) =>
   fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "kis", symbols: items })
+    body: JSON.stringify({ provider: "naver", symbols: items })
   });
 
 const requestQuotes = async (items: PriceRequestItem[]) => {
@@ -151,7 +148,7 @@ export const refreshApiPrices = async (state: AppState): Promise<PriceRefreshRes
       return {
         ...asset,
         ticker: quote.ticker || asset.ticker,
-        providerSymbol: quote.ticker || asset.providerSymbol,
+        providerSymbol: quote.providerSymbol || quote.ticker || asset.providerSymbol,
         currentPrice: quote.price,
         currentFxRate: quote.fxRate || asset.currentFxRate || 1,
         priceSource: quote.source,

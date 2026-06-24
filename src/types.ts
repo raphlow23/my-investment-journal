@@ -2,7 +2,7 @@ export type AccountType = "taxable" | "isa" | "pension" | "dc" | "cash";
 export type Currency = "KRW" | "USD";
 export type Market = "KR" | "US" | "ETF_KR" | "ETF_US";
 export type AssetClass = "stock" | "etf" | "cash" | "bond" | "pension";
-export type PriceProvider = "manual" | "twelve_data";
+export type PriceProvider = "manual" | "naver";
 export type PriceSource = "manual" | "api";
 export type TradeSide = "buy" | "sell";
 export type TradeKind =
@@ -252,6 +252,7 @@ export interface AppState {
 export interface PriceQuote {
   instrumentId: string;
   ticker: string;
+  providerSymbol?: string;
   market: Market;
   price: number;
   currency: Currency;
