@@ -60,7 +60,6 @@ import {
 import { createEmptyState, mergeWithDefaults } from "./data/defaults";
 import {
   accountName,
-  aggregateAssetPositions,
   assetName,
   buildWarnings,
   calculateMetrics,
@@ -83,7 +82,7 @@ import {
 } from "./lib/format";
 import { clearLegacyLocalState } from "./lib/storage";
 import { downloadText, exportCsv, exportJson, exportMarkdown } from "./lib/exporters";
-import { buildManualQuote, refreshApiPrices } from "./lib/prices";
+import { refreshApiPrices } from "./lib/prices";
 import {
   getFirebaseServices,
   getFirebaseAuthErrorMessage,
@@ -332,12 +331,14 @@ const InstrumentSearchInput = ({
   value,
   onValueChange,
   onSelect,
-  placeholder
+  placeholder,
+  registeredAssets = []
 }: {
   value: string;
   onValueChange: (value: string) => void;
   onSelect: (item: InstrumentSuggestion) => void;
   placeholder: string;
+  registeredAssets?: Asset[];
 }) => {
   const [items, setItems] = useState<InstrumentSuggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -356,17 +357,37 @@ const InstrumentSearchInput = ({
     let active = true;
     setLoading(true);
     const timeout = window.setTimeout(async () => {
+      const normalized = query.toLowerCase().replace(/\s+/g, "");
+      const localItems: InstrumentSuggestion[] = registeredAssets
+        .filter((asset) =>
+          asset.name.toLowerCase().replace(/\s+/g, "").includes(normalized) ||
+          asset.ticker.toLowerCase().includes(query.toLowerCase())
+        )
+        .slice(0, 8)
+        .map((asset) => ({
+          name: asset.name,
+          ticker: asset.ticker,
+          providerSymbol: asset.providerSymbol,
+          market: asset.market,
+          currency: asset.currency,
+          country: asset.country,
+          assetClass: asset.assetClass,
+          source: "registered"
+        }));
       try {
-        const result = await searchInstruments(query);
+        const onlineItems = await searchInstruments(query);
+        const result = [...localItems, ...onlineItems].filter(
+          (item, index, all) => all.findIndex((candidate) => candidate.market === item.market && candidate.ticker === item.ticker) === index
+        );
         if (!active) return;
         setItems(result);
         setOpen(true);
         setError(result.length ? "" : "검색 결과가 없습니다.");
       } catch {
         if (!active) return;
-        setItems([]);
+        setItems(localItems);
         setOpen(true);
-        setError("온라인 종목 검색에 실패했습니다.");
+        setError(localItems.length ? "" : "온라인 종목 검색에 실패했습니다.");
       } finally {
         if (active) setLoading(false);
       }
@@ -376,7 +397,7 @@ const InstrumentSearchInput = ({
       active = false;
       window.clearTimeout(timeout);
     };
-  }, [value]);
+  }, [value, registeredAssets]);
 
   return (
     <div className="relative">
@@ -408,7 +429,9 @@ const InstrumentSearchInput = ({
               }}
             >
               <span className="font-semibold text-slate-950 dark:text-white">{item.name}</span>
-              <span className="text-xs text-slate-500">{item.ticker} · {marketLabels[item.market]} · {item.source === "naver" ? "네이버 금융" : "Yahoo Finance"}</span>
+              <span className="text-xs text-slate-500">
+                {item.ticker} · {marketLabels[item.market]} · {item.source === "registered" ? "등록 종목" : item.source === "naver" ? "네이버 금융" : "Yahoo Finance"}
+              </span>
             </button>
           ))}
         </div>
@@ -485,6 +508,26 @@ const defaultAssetClassForMarket = (market: Market): AssetClass =>
 const defaultBenchmarkForMarket = (market: Market) =>
   market === "US" ? "S&P500" : market === "ETF_US" ? "NASDAQ100" : "KOSPI200";
 
+const inferAssetClassification = (name: string, ticker: string, assetClass: AssetClass) => {
+  const text = `${name} ${ticker}`.toUpperCase();
+  const rules: Array<{ words: string[]; sector: string; themes: string[] }> = [
+    { words: ["삼성전자", "SK하이닉스", "반도체", "SEMICONDUCTOR", "NVDA", "AMD", "AVGO"], sector: "반도체", themes: ["AI", "반도체"] },
+    { words: ["APPLE", "AAPL", "MICROSOFT", "MSFT", "SOFTWARE", "소프트웨어"], sector: "정보기술", themes: ["기술주"] },
+    { words: ["LILLY", "LLY", "PHARMA", "BIO", "제약", "바이오"], sector: "헬스케어", themes: ["제약·바이오"] },
+    { words: ["BANK", "FINANCIAL", "은행", "금융"], sector: "금융", themes: ["금융"] },
+    { words: ["자동차", "MOTOR", "TESLA", "TSLA"], sector: "자동차", themes: ["모빌리티"] },
+    { words: ["BATTERY", "2차전지", "이차전지"], sector: "소재", themes: ["2차전지"] },
+    { words: ["S&P500", "나스닥", "NASDAQ", "다우존스", "DOW JONES"], sector: "시장지수", themes: ["미국지수"] },
+    { words: ["배당", "DIVIDEND"], sector: "배당전략", themes: ["배당"] },
+    { words: ["채권", "BOND", "TREASURY"], sector: "채권", themes: ["채권"] }
+  ];
+  const matched = rules.find((rule) => rule.words.some((word) => text.includes(word)));
+  if (matched) return matched;
+  return assetClass === "etf"
+    ? { sector: "ETF", themes: ["ETF"] }
+    : { sector: "", themes: [] as string[] };
+};
+
 const tradeAmountKrw = ({
   quantity,
   price,
@@ -542,14 +585,15 @@ const buildAssetFromTrade = ({
   const trimmedName = name.trim();
   const symbol = (providerSymbol || ticker || trimmedName).trim().toUpperCase();
   const currency = defaultCurrencyForMarket(market);
+  const classification = inferAssetClassification(trimmedName, symbol, defaultAssetClassForMarket(market));
   return {
     id: createId("asset"),
     name: trimmedName,
     ticker: symbol,
     market,
     assetClass: defaultAssetClassForMarket(market),
-    sector: "",
-    themes: [],
+    sector: classification.sector,
+    themes: classification.themes,
     country: isUsMarket(market) ? "US" : "KR",
     currency,
     benchmark: defaultBenchmarkForMarket(market),
@@ -1022,10 +1066,6 @@ function Dashboard({
   const themeData = groupPositions(state, scopedPositions, "theme");
   const marketData = groupExposure(state, scopedPositions, "market");
   const currencyData = groupExposure(state, scopedPositions, "currency");
-  const assetData = aggregateAssetPositions(state, scopedPositions).slice(0, 10);
-  const activePositions = scopedPositions.filter((position) => position.quantity > 0);
-  const biggestLosers = [...activePositions].sort((a, b) => a.unrealizedReturnRate - b.unrealizedReturnRate).slice(0, 5);
-  const contributors = [...activePositions].sort((a, b) => b.unrealizedPnlKrw - a.unrealizedPnlKrw).slice(0, 5);
   const dataGapCount = missingPriceCount(state, positions);
   const hasCostBasis = scopedMetrics.totalInvested > 0;
   const hasPortfolioData = positions.some((position) => position.quantity > 0) || state.trades.length > 0;
@@ -1051,7 +1091,7 @@ function Dashboard({
             <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{state.settings.lastPriceRefreshError}</p>
           )}
         </div>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
           <button className="primary-button" type="button" onClick={() => onOpenTab("trades")}><Plus className="h-4 w-4" />매매 입력</button>
           <button className="secondary-button" type="button" onClick={() => onOpenTab("holdings")}>보유 보기</button>
           <button className="secondary-button" type="button" onClick={() => onOpenTab("checklist")}>매수점검</button>
@@ -1108,65 +1148,41 @@ function Dashboard({
         ))}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
         <MetricCard label="총 평가금액" value={dataGapCount ? "데이터 부족" : formatKrw(scopedMetrics.totalMarketValue)} />
         <MetricCard label="총 평가손익" value={dataGapCount ? "데이터 부족" : formatKrw(scopedMetrics.unrealizedPnl)} tone={scopedMetrics.unrealizedPnl >= 0 ? "good" : "bad"} />
         <MetricCard label="원가기준 누적수익률" value={hasCostBasis ? formatPercent(scopedMetrics.totalReturnRate) : "—"} tone={scopedMetrics.totalReturnRate >= 0 ? "good" : "bad"} />
         <MetricCard label="실현손익" value={formatKrw(scopedMetrics.realizedPnl)} tone={scopedMetrics.realizedPnl >= 0 ? "good" : "bad"} />
-        <MetricCard label="평가손익" value={dataGapCount ? "데이터 부족" : formatKrw(scopedMetrics.unrealizedPnl)} tone={scopedMetrics.unrealizedPnl >= 0 ? "good" : "bad"} />
         <MetricCard label="데이터 부족 종목" value={`${dataGapCount}개`} tone={dataGapCount ? "warn" : "good"} />
-        <MetricCard label="현재가 기준시점" value={latestPriceBasis(state.assets)} />
-        <MetricCard label="환율 기준시점" value={latestFxBasis(state.assets)} />
         <MetricCard label="현금 비중" value={formatPercent(scopedMetrics.cashWeight)} />
         <MetricCard label="최근 30일 매매" value={`${scopedMetrics.recent30DayTradeCount}회`} />
         <MetricCard label="이번 달 감정 매매" value={`${scopedMetrics.monthlyEmotionalTradeCount}회`} tone={scopedMetrics.monthlyEmotionalTradeCount ? "warn" : "good"} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <Section title="계좌별 평가금액" icon={<BarChart3 className="h-5 w-5 text-teal-700" />}>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={accountData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`} tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value) => formatKrw(Number(value))} />
-                <Bar dataKey="value" name="평가금액" fill="#0f766e" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Section>
-        <Section title="종목별 비중 TOP 10">
-          <div className="grid gap-2">
-            {assetData.map((item) => (
-              <WeightRow key={item.assetId} label={item.asset?.name ?? "미등록 종목"} value={item.marketValueKrw} total={scopedMetrics.totalMarketValue} />
-            ))}
-            {!assetData.length && <EmptyText text="보유 포지션이 아직 없습니다." />}
-          </div>
-        </Section>
-      </div>
+      <Section title="계좌별 평가금액" icon={<BarChart3 className="h-5 w-5 text-teal-700" />}>
+        <div className="h-52 sm:h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={accountData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`} tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(value) => formatKrw(Number(value))} />
+              <Bar dataKey="value" name="평가금액" fill="#0f766e" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-2 gap-2 sm:gap-4">
         <PiePanel title="섹터별 비중" data={sectorData} />
         <PiePanel title="테마별 비중" data={themeData} />
         <PiePanel title="국내/해외 비중" data={marketData} />
         <PiePanel title="원화/달러 노출" data={currencyData} />
       </div>
 
-      <Section title={accountScope === "all" ? "전체 보유종목" : `${accountTabs.find((tab) => tab.key === accountScope)?.label} 보유종목`}>
-        <AccountPositionTable state={state} positions={scopedPositions} totalValue={scopedMetrics.totalMarketValue} />
-      </Section>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Section title="손실률 큰 종목">
-          <PositionMiniList positions={biggestLosers} state={state} mode="return" />
-        </Section>
-        <Section title="수익 기여도 큰 종목">
-          <PositionMiniList positions={contributors} state={state} mode="pnl" />
-        </Section>
-        <Section title="자동 경고" icon={<ShieldAlert className="h-5 w-5 text-amber-600" />}>
-          <div className="grid gap-2">
-            {warnings.slice(0, 8).map((warning) => (
+      <Section title="자동 경고" icon={<ShieldAlert className="h-5 w-5 text-amber-600" />}>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {warnings.slice(0, 6).map((warning) => (
               <div
                 key={warning.id}
                 className={`rounded-md border px-3 py-2 text-sm ${
@@ -1183,8 +1199,7 @@ function Dashboard({
             ))}
             {!warnings.length && <EmptyText text="현재 표시할 경고가 없습니다." />}
           </div>
-        </Section>
-      </div>
+      </Section>
         </>
       )}
     </div>
@@ -1192,10 +1207,10 @@ function Dashboard({
 }
 
 const MetricCard = ({ label, value, tone }: { label: string; value: string; tone?: "good" | "bad" | "warn" }) => (
-  <div className="panel">
+  <div className="panel p-3 sm:p-4">
     <p className="label">{label}</p>
     <p
-      className={`mt-2 break-words text-lg font-black ${
+      className={`mt-1 break-words text-base font-black sm:mt-2 sm:text-lg ${
         tone === "good"
           ? "text-teal-700 dark:text-teal-300"
           : tone === "bad"
@@ -1210,31 +1225,19 @@ const MetricCard = ({ label, value, tone }: { label: string; value: string; tone
   </div>
 );
 
-const WeightRow = ({ label, value, total }: { label: string; value: number; total: number }) => (
-  <div className="grid gap-1">
-    <div className="flex items-center justify-between gap-2 text-sm">
-      <span className="font-semibold">{label}</span>
-      <span className="text-slate-500 dark:text-slate-400">{total > 0 ? formatPercent((value / total) * 100) : "—"}</span>
-    </div>
-    <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-      <div className="h-full rounded-full bg-teal-700" style={{ width: `${Math.min(total > 0 ? (value / total) * 100 : 0, 100)}%` }} />
-    </div>
-  </div>
-);
-
 const PiePanel = ({ title, data }: { title: string; data: Array<{ name: string; value: number }> }) => (
   <Section title={title}>
-    <div className="h-72">
+    <div className="h-44 sm:h-64">
       {data.length ? (
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie data={data} dataKey="value" nameKey="name" innerRadius={60} outerRadius={95} paddingAngle={2}>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius={34} outerRadius={58} paddingAngle={2}>
               {data.map((item, index) => (
                 <Cell key={item.name} fill={chartColors[index % chartColors.length]} />
               ))}
             </Pie>
             <Tooltip formatter={(value) => formatKrw(Number(value))} />
-            <Legend />
+            <Legend wrapperStyle={{ fontSize: 10 }} />
           </PieChart>
         </ResponsiveContainer>
       ) : (
@@ -1242,28 +1245,6 @@ const PiePanel = ({ title, data }: { title: string; data: Array<{ name: string; 
       )}
     </div>
   </Section>
-);
-
-const PositionMiniList = ({
-  positions,
-  state,
-  mode
-}: {
-  positions: ReturnType<typeof calculatePositions>;
-  state: AppState;
-  mode: "return" | "pnl";
-}) => (
-  <div className="grid gap-2">
-    {positions.map((position) => (
-      <div key={position.key} className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-sm dark:bg-slate-950">
-        <span className="font-semibold">{assetName(state.assets, position.assetId)}</span>
-        <span className={position.unrealizedPnlKrw >= 0 ? "text-teal-700 dark:text-teal-300" : "text-red-600 dark:text-red-300"}>
-          {mode === "return" ? formatPercent(position.unrealizedReturnRate) : formatKrw(position.unrealizedPnlKrw)}
-        </span>
-      </div>
-    ))}
-    {!positions.length && <EmptyText text="표시할 포지션이 없습니다." />}
-  </div>
 );
 
 const formatPlanPrice = (value?: number, currency?: Currency) => {
@@ -1391,44 +1372,6 @@ const AccountPositionTable = ({
   );
 };
 
-function PriceManualUpdater({ state, updateState }: { state: AppState; updateState: (producer: (current: AppState) => AppState, message?: string) => void }) {
-  return (
-    <Section title="현재가·환율 입력">
-      <div className="mb-3 rounded-md bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-        <p>현재가 기준: {latestPriceBasis(state.assets)}</p>
-        <p>환율 기준: {latestFxBasis(state.assets)}</p>
-      </div>
-      <div className="grid gap-3">
-        {state.assets.map((asset) => (
-          <div key={asset.id} className="grid gap-2 rounded-md bg-slate-50 p-3 dark:bg-slate-950 sm:grid-cols-[1fr_120px_120px_auto] sm:items-end">
-            <div>
-              <p className="font-semibold">{asset.name}</p>
-              <p className="text-xs text-slate-500">{asset.currency} · {asset.priceSource === "api" ? "자동 가격" : "수동 가격"}</p>
-              {asset.priceUpdateError && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{asset.priceUpdateError}</p>}
-            </div>
-            <Field label="현재가">
-              <input className="field" type="number" value={asset.currentPrice} onChange={(event) => updateState((current) => ({
-                ...current,
-                assets: current.assets.map((item) => item.id === asset.id ? { ...item, currentPrice: inputNumber(event.target.value), priceSource: "manual", priceUpdateError: undefined, priceUpdatedAt: new Date().toISOString() } : item),
-                priceQuotes: [buildManualQuote({ ...asset, currentPrice: inputNumber(event.target.value), priceSource: "manual", priceUpdatedAt: new Date().toISOString() }), ...current.priceQuotes].slice(0, 500)
-              }))} />
-            </Field>
-            <Field label="현재 환율">
-              <input className="field" type="number" value={asset.currentFxRate} onChange={(event) => updateState((current) => ({
-                ...current,
-                assets: current.assets.map((item) => item.id === asset.id ? { ...item, currentFxRate: inputNumber(event.target.value) || 1, priceSource: "manual", priceUpdateError: undefined, priceUpdatedAt: new Date().toISOString() } : item),
-                priceQuotes: [buildManualQuote({ ...asset, currentFxRate: inputNumber(event.target.value) || 1, priceSource: "manual", priceUpdatedAt: new Date().toISOString() }), ...current.priceQuotes].slice(0, 500)
-              }))} />
-            </Field>
-            <span className="text-xs text-slate-500">{asset.priceUpdatedAt ? `${asset.priceUpdatedAt.slice(0, 16).replace("T", " ")} / ${sourceLabel(asset.priceSource)}` : "데이터 부족"}</span>
-          </div>
-        ))}
-        {!state.assets.length && <EmptyText text="종목을 먼저 등록하세요." />}
-      </div>
-    </Section>
-  );
-}
-
 function Holdings({
   state,
   updateState,
@@ -1449,14 +1392,14 @@ function Holdings({
       <div className="panel flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="label">보유 관리</p>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">현재가와 환율을 입력하면 보유 목록의 평가손익이 다시 계산됩니다.</p>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">현재가 기준: {latestPriceBasis(state.assets)}</p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">환율 기준: {latestFxBasis(state.assets)}</p>
         </div>
         <button className="primary-button" type="button" onClick={onInitialHolding}>
           <Plus className="h-4 w-4" />
           초기보유 입력
         </button>
       </div>
-      <PriceManualUpdater state={state} updateState={updateState} />
       <Section title="보유 종목 목록">
         <AccountPositionTable state={state} positions={positions} totalValue={metrics.totalMarketValue} />
       </Section>
@@ -1535,6 +1478,10 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
   const saveAsset = (event: FormEvent) => {
     event.preventDefault();
     if (!assetDraft.name.trim()) return;
+    if (!editingAssetId && (!assetDraft.ticker || !assetDraft.providerSymbol)) {
+      window.alert("검색 결과에서 종목을 선택한 뒤 등록해 주세요.");
+      return;
+    }
     const symbol = (assetDraft.providerSymbol || assetDraft.ticker || assetDraft.name).trim().toUpperCase();
     const existingAsset = editingAssetId ? state.assets.find((asset) => asset.id === editingAssetId) : undefined;
     const asset: Asset = {
@@ -1664,19 +1611,25 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
               <InstrumentSearchInput
                 value={assetDraft.name}
                 onValueChange={(value) => setAssetDraft({ ...assetDraft, name: value, ticker: "", providerSymbol: "" })}
-                onSelect={(item) => setAssetDraft({
-                  ...assetDraft,
-                  name: item.name,
-                  ticker: item.ticker,
-                  providerSymbol: item.providerSymbol,
-                  market: item.market,
-                  assetClass: item.assetClass,
-                  country: item.country,
-                  currency: item.currency,
-                  currentFxRate: item.currency === "KRW" ? 1 : assetDraft.currentFxRate,
-                  benchmark: defaultBenchmarkForMarket(item.market)
-                })}
+                onSelect={(item) => {
+                  const classification = inferAssetClassification(item.name, item.ticker, item.assetClass);
+                  setAssetDraft({
+                    ...assetDraft,
+                    name: item.name,
+                    ticker: item.ticker,
+                    providerSymbol: item.providerSymbol,
+                    market: item.market,
+                    assetClass: item.assetClass,
+                    sector: assetDraft.sector || classification.sector,
+                    themes: assetDraft.themes || classification.themes.join(", "),
+                    country: item.country,
+                    currency: item.currency,
+                    currentFxRate: item.currency === "KRW" ? 1 : assetDraft.currentFxRate,
+                    benchmark: defaultBenchmarkForMarket(item.market)
+                  });
+                }}
                 placeholder="예: 삼성, 삼성전자, AAPL"
+                registeredAssets={state.assets}
               />
             </Field>
           </div>
@@ -1764,13 +1717,12 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
 function Trades({ state, updateState }: { state: AppState; updateState: (producer: (current: AppState) => AppState, message?: string) => void }) {
   const [showOptional, setShowOptional] = useState(false);
   const createTradeDraft = () => {
-    const firstAsset = state.assets[0];
-    const initialMarket = firstAsset?.market ?? "KR" as Market;
+    const initialMarket = "KR" as Market;
     return {
       date: today(),
       accountId: state.accounts[0]?.id ?? "",
-      assetId: firstAsset?.id ?? "",
-      assetName: firstAsset?.name ?? "",
+      assetId: "",
+      assetName: "",
       market: initialMarket,
       side: "buy" as TradeSide,
       kind: "new" as TradeKind,
@@ -1784,6 +1736,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       fxRate: 1,
       horizon: "3m" as Horizon,
       emotion: "planned" as Emotion,
+      reason: "",
       memo: "",
       ticker: "",
       providerSymbol: ""
@@ -1802,15 +1755,16 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
   }, []);
 
   useEffect(() => {
-    const firstAsset = state.assets[0];
     setDraft((current) => ({
       ...current,
-      accountId: current.accountId || state.accounts[0]?.id || "",
-      assetId: current.assetId || firstAsset?.id || "",
-      assetName: current.assetName || firstAsset?.name || "",
-      market: current.market || firstAsset?.market || "KR"
+      accountId: current.accountId || state.accounts[0]?.id || ""
     }));
-  }, [state.accounts, state.assets]);
+  }, [state.accounts]);
+
+  const latestChecklistReason = (assetId: string, accountId: string) =>
+    state.checklists
+      .filter((item) => item.assetId === assetId && (!accountId || item.accountId === accountId) && item.buyReason.trim())
+      .sort((a, b) => b.date.localeCompare(a.date))[0]?.buyReason ?? "";
 
   const startEditTrade = (trade: Trade) => {
     const asset = state.assets.find((item) => item.id === trade.assetId);
@@ -1838,6 +1792,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       fxRate: trade.fxRate || 1,
       horizon: trade.horizon,
       emotion: trade.emotion,
+      reason: trade.reason,
       memo: trade.memo,
       ticker: trade.tickerSnapshot,
       providerSymbol: trade.tickerSnapshot
@@ -1879,9 +1834,16 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
     event.preventDefault();
     if (!draft.accountId || !draft.assetName.trim() || draft.quantity <= 0 || draft.price <= 0) return;
     if (draft.priceCurrency === "USD" && draft.priceKrw <= 0) return;
+    const hasSelectedInstrument = Boolean(
+      state.assets.some((item) => item.id === draft.assetId) ||
+      (draft.ticker && draft.providerSymbol)
+    );
+    if (!hasSelectedInstrument) {
+      window.alert("종목명을 입력한 뒤 검색 결과에서 정확한 종목을 선택해 주세요.");
+      return;
+    }
     const matchedAsset =
       state.assets.find((item) => item.id === draft.assetId) ??
-      state.assets.find((item) => item.name.trim().toLowerCase() === draft.assetName.trim().toLowerCase()) ??
       state.assets.find((item) => Boolean(draft.providerSymbol) && (item.providerSymbol === draft.providerSymbol || item.ticker === draft.providerSymbol));
     const newAsset = matchedAsset
       ? null
@@ -1916,7 +1878,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       assetNameSnapshot: asset.name,
       tickerSnapshot: asset.ticker,
       marketSnapshot: asset.market,
-      reason: "",
+      reason: draft.reason,
       invalidation: "",
       horizon: draft.horizon,
       emotion: draft.emotion,
@@ -1949,6 +1911,7 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
       foreignFee: 0,
       fee: 0,
       tax: 0,
+      reason: "",
       memo: ""
     });
   };
@@ -1985,16 +1948,12 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
             <InstrumentSearchInput
               value={draft.assetName}
               onValueChange={(value) => {
-                const asset = state.assets.find((item) => item.name.trim().toLowerCase() === value.trim().toLowerCase());
                 setDraft({
                   ...draft,
                   assetName: value,
-                  assetId: asset?.id ?? "",
-                  market: asset?.market ?? draft.market,
-                  priceCurrency: asset && isUsMarket(asset.market) ? "USD" : asset ? "KRW" : draft.priceCurrency,
-                  fxRate: asset?.currentFxRate ?? draft.fxRate,
-                  ticker: asset?.ticker ?? "",
-                  providerSymbol: asset?.providerSymbol ?? ""
+                  assetId: "",
+                  ticker: "",
+                  providerSymbol: ""
                 });
               }}
               onSelect={(item) => {
@@ -2009,10 +1968,12 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
                   priceCurrency: isUsMarket(asset?.market ?? item.market) ? "USD" : "KRW",
                   fxRate: asset?.currentFxRate ?? (item.currency === "KRW" ? 1 : draft.fxRate),
                   ticker: item.ticker,
-                  providerSymbol: item.providerSymbol
+                  providerSymbol: item.providerSymbol,
+                  reason: draft.reason || (asset ? latestChecklistReason(asset.id, draft.accountId) : "")
                 });
               }}
               placeholder="예: 삼성, 삼성전자, AAPL"
+              registeredAssets={state.assets}
             />
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -2082,6 +2043,14 @@ function Trades({ state, updateState }: { state: AppState; updateState: (produce
           <div className="rounded-md bg-slate-50 px-3 py-2 text-sm dark:bg-slate-950">
             총 거래금액: {formatKrw(tradeAmountKrw(draft))}
           </div>
+          <Field label={draft.side === "buy" ? "매수 이유" : "매도 이유"}>
+            <textarea
+              className="field min-h-20"
+              value={draft.reason}
+              onChange={(event) => setDraft({ ...draft, reason: event.target.value })}
+              placeholder={draft.side === "buy" ? "왜 이 종목을 지금 매수하는지 기록하세요." : "왜 지금 매도하는지 기록하세요."}
+            />
+          </Field>
           <div className="grid gap-3">
             <button className="secondary-button justify-self-start" type="button" onClick={() => setShowOptional((value) => !value)}>
               {showOptional ? "선택 입력 접기" : "선택 입력 펼치기"}
@@ -2209,6 +2178,7 @@ function TradeTable({
         header: "당시 환율"
       },
       { accessorFn: (row) => formatKrw(row.amount), id: "amount", header: "총 거래금액" },
+      { accessorKey: "reason", header: "매매 이유" },
       { accessorKey: "memo", header: "메모" },
       {
         id: "actions",
@@ -2294,6 +2264,7 @@ function TradeTable({
                     <strong>{row.priceCurrency === "USD" ? formatNumber(row.fxRate, 2) : row.market}</strong>
                   </p>
                 </div>
+                {row.reason && <p className="mt-2 line-clamp-2 text-xs font-medium text-slate-700 dark:text-slate-200">이유: {row.reason}</p>}
                 {row.memo && <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{row.memo}</p>}
               </div>
             ))}
