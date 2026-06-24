@@ -94,6 +94,14 @@ export const hasUserData = (state: AppState) =>
   state.swapReviews.length > 0 ||
   state.monthlyReviews.length > 0;
 
+const dataScore = (state: AppState) =>
+  state.trades.length * 100 +
+  state.assets.length * 20 +
+  state.theses.length * 10 +
+  state.checklists.length * 5 +
+  state.swapReviews.length * 3 +
+  state.monthlyReviews.length * 3;
+
 export const downloadCloudState = async (db: Firestore, uid: string, localBase: AppState): Promise<AppState> => {
   const cloudDeletes = await downloadCloudDeletes(db, uid);
   const snapshot = await getDoc(snapshotRef(db, uid));
@@ -128,6 +136,7 @@ export const downloadCloudState = async (db: Firestore, uid: string, localBase: 
               ].map((item) => [`${item.collection}:${item.id}`, item])
             ).values()
           ),
+          userId: uid,
           enabled: true,
           lastSyncedAt: new Date().toISOString()
         }
@@ -164,6 +173,7 @@ export const downloadCloudState = async (db: Firestore, uid: string, localBase: 
             ].map((item) => [`${item.collection}:${item.id}`, item])
           ).values()
         ),
+        userId: uid,
         enabled: true,
         lastSyncedAt: new Date().toISOString()
       }
@@ -173,6 +183,25 @@ export const downloadCloudState = async (db: Firestore, uid: string, localBase: 
 
 export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppState): Promise<AppState> => {
   const remote = await downloadCloudState(db, uid, local);
+  const localOwner = local.settings.cloudSync.userId;
+  if (localOwner !== uid) {
+    const chosen = !localOwner && dataScore(local) > dataScore(remote) ? local : remote;
+    const accountState = mergeWithDefaults({
+      ...chosen,
+      settings: {
+        ...chosen.settings,
+        cloudSync: {
+          ...chosen.settings.cloudSync,
+          userId: uid,
+          enabled: true,
+          lastSyncedAt: new Date().toISOString()
+        }
+      }
+    });
+    await uploadStateToCloud(db, uid, accountState);
+    return accountState;
+  }
+
   const pendingDeletes = Array.from(
     new Map(
       [
@@ -197,6 +226,7 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
       cloudSync: {
         ...local.settings.cloudSync,
         pendingDeletes,
+        userId: uid,
         enabled: true,
         lastSyncedAt: new Date().toISOString()
       }
@@ -207,8 +237,19 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
 };
 
 export const uploadStateToCloud = async (db: Firestore, uid: string, state: AppState) => {
+  const existingSnapshot = await getDoc(snapshotRef(db, uid));
+  if (existingSnapshot.exists() && state.settings.cloudSync.userId !== uid) return;
+
   const snapshot = removeUndefinedFields({
     ...state,
+    settings: {
+      ...state.settings,
+      cloudSync: {
+        ...state.settings.cloudSync,
+        userId: uid,
+        enabled: true
+      }
+    },
     updatedAt: new Date().toISOString()
   });
   await setDoc(snapshotRef(db, uid), snapshot);
