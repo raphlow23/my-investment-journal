@@ -185,7 +185,9 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
   const remote = await downloadCloudState(db, uid, local);
   const localOwner = local.settings.cloudSync.userId;
   if (localOwner !== uid) {
-    const chosen = !localOwner && dataScore(local) > dataScore(remote) ? local : remote;
+    const forceLocal = typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("syncSource") === "local";
+    const chosen = forceLocal || (!localOwner && dataScore(local) > dataScore(remote)) ? local : remote;
     const accountState = mergeWithDefaults({
       ...chosen,
       settings: {
@@ -199,6 +201,11 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
       }
     });
     await uploadStateToCloud(db, uid, accountState);
+    if (forceLocal) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("syncSource");
+      window.history.replaceState({}, "", url);
+    }
     return accountState;
   }
 
