@@ -212,6 +212,7 @@ export type CloudSyncStatus =
 
 export interface CloudSyncMeta {
   enabled: boolean;
+  userId?: string;
   lastSyncedAt?: string;
   lastError?: string;
   pendingDeletes?: CloudDelete[];
