@@ -104,6 +104,7 @@ export const downloadCloudState = async (db: Firestore, uid: string, localBase: 
     settings: {
       ...localBase.settings,
       cloudSync: {
+        ...localBase.settings.cloudSync,
         enabled: true,
         lastSyncedAt: new Date().toISOString()
       }
@@ -126,6 +127,7 @@ export const mergeLocalAndCloud = async (db: Firestore, uid: string, local: AppS
     settings: {
       ...local.settings,
       cloudSync: {
+        ...local.settings.cloudSync,
         enabled: true,
         lastSyncedAt: new Date().toISOString()
       }
