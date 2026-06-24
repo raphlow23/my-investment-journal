@@ -4,7 +4,6 @@ import {
   getDoc,
   getDocs,
   setDoc,
-  writeBatch,
   type Firestore
 } from "firebase/firestore";
 import { mergeWithDefaults } from "../data/defaults";
@@ -65,11 +64,6 @@ const mergeRecords = <T extends SyncRecord>(local: T[], remote: T[]) => {
   });
   return Array.from(merged.values()).filter((item) => !(item as Record<string, unknown>).deletedAt);
 };
-
-const stampRecord = <T extends SyncRecord>(record: T): T & { updatedAt: string } => ({
-  ...record,
-  updatedAt: String((record as Record<string, unknown>).updatedAt || (record as Record<string, unknown>).createdAt || new Date().toISOString())
-});
 
 const removeUndefinedFields = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -250,38 +244,4 @@ export const uploadStateToCloud = async (db: Firestore, uid: string, state: AppS
     updatedAt: new Date().toISOString(),
     appVersion: state.version
   }, { merge: true });
-
-  for (const item of collectionMap) {
-    const records = state[item.stateKey] as unknown as SyncRecord[];
-    let batch = writeBatch(db);
-    let count = 0;
-    for (const record of records) {
-      const id = recordId(record);
-      const safeRecord = removeUndefinedFields(stampRecord({ ...record, id })) as SyncRecord;
-      batch.set(doc(db, "users", uid, item.firestoreKey, id), safeRecord, { merge: true });
-      count += 1;
-      if (count >= 400) {
-        await batch.commit();
-        batch = writeBatch(db);
-        count = 0;
-      }
-    }
-    if (count > 0) await batch.commit();
-  }
-
-  const pendingDeletes = state.settings.cloudSync.pendingDeletes ?? [];
-  let deleteBatch = writeBatch(db);
-  let deleteCount = 0;
-  for (const item of pendingDeletes) {
-    const markerId = encodeURIComponent(`${item.collection}:${item.id}`);
-    deleteBatch.set(doc(db, "users", uid, "deletionMarkers", markerId), item);
-    deleteBatch.delete(doc(db, "users", uid, item.collection, item.id));
-    deleteCount += 2;
-    if (deleteCount >= 400) {
-      await deleteBatch.commit();
-      deleteBatch = writeBatch(db);
-      deleteCount = 0;
-    }
-  }
-  if (deleteCount > 0) await deleteBatch.commit();
 };

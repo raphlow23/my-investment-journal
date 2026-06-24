@@ -696,19 +696,18 @@ function App() {
         }
       }
     };
+    setState(saved);
+    latestStateRef.current = saved;
+    document.documentElement.classList.toggle("dark", saved.settings.darkMode);
     let savedOnline = true;
-    if (applyingCloudRef.current) {
-      setState(saved);
-      latestStateRef.current = saved;
-      document.documentElement.classList.toggle("dark", saved.settings.darkMode);
-    } else {
+    if (!applyingCloudRef.current) {
       savedOnline = await uploadCurrentState(firebaseUser, saved);
     }
     if (message && savedOnline) setNotice(message);
   };
 
   const updateState = (producer: (current: AppState) => AppState, message?: string) => {
-    void persist(producer(state), message);
+    void persist(producer(latestStateRef.current), message);
   };
 
   const uploadCurrentState = async (user: User, snapshot = latestStateRef.current) => {
@@ -1517,16 +1516,18 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
 
   const deleteAsset = (asset: Asset) => {
     const linkedTradeCount = state.trades.filter((trade) => trade.assetId === asset.id).length;
-    if (linkedTradeCount > 0) {
-      window.alert(`${asset.name} 종목에 연결된 매매 기록이 ${linkedTradeCount}개 있습니다.\n매매 기록을 먼저 삭제한 뒤 종목을 삭제해주세요.`);
-      return;
-    }
-    if (!window.confirm(`${asset.name} 종목을 삭제할까요?\n보유·대응 기준과 관련 점검 기록도 함께 삭제됩니다.`)) return;
+    const detail = linkedTradeCount > 0
+      ? `\n연결된 매매 기록 ${linkedTradeCount}개도 함께 삭제됩니다.`
+      : "";
+    if (!window.confirm(`${asset.name} 종목을 삭제할까요?${detail}\n보유·대응 기준과 관련 점검 기록도 함께 삭제됩니다.`)) return;
 
     updateState((current) => {
       const now = new Date().toISOString();
       const deleteItems = [
         { collection: "instruments" as const, id: asset.id, deletedAt: now },
+        ...current.trades
+          .filter((item) => item.assetId === asset.id)
+          .map((item) => ({ collection: "tradeLogs" as const, id: item.id, deletedAt: now })),
         ...current.theses.filter((item) => item.assetId === asset.id).map((item) => ({ collection: "positionPlans" as const, id: item.id, deletedAt: now })),
         ...current.checklists.filter((item) => item.assetId === asset.id).map((item) => ({ collection: "preTradeChecklists" as const, id: item.id, deletedAt: now })),
         ...current.swapReviews
@@ -1546,6 +1547,7 @@ function Manage({ state, updateState }: { state: AppState; updateState: (produce
       return {
         ...current,
         assets: current.assets.filter((item) => item.id !== asset.id),
+        trades: current.trades.filter((item) => item.assetId !== asset.id),
         theses: current.theses.filter((item) => item.assetId !== asset.id),
         checklists: current.checklists.filter((item) => item.assetId !== asset.id),
         swapReviews: current.swapReviews.filter((item) => item.currentAssetId !== asset.id && item.candidateAssetId !== asset.id),
